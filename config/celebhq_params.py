@@ -4,7 +4,7 @@ from pathlib import Path
 # Dataset Params
 # ===============
 dataset_name = 'celebhq'
-dataset_im_path = Path(r'D:\数据集\CelebAMask-HQ/CelebAMask-HQ')
+dataset_im_path = Path('D:/datasets/CelebAMask-HQ/CelebAMask-HQ')
 dataset_im_channels = 3
 dataset_im_size = 256
 
@@ -92,8 +92,8 @@ train_save_latents = False
 train_cf_guidance_scale = 1.0
 train_vae_latent_dir_name = 'vae_latents'
 train_vqvae_latent_dir_name = 'vqvae_latents'
+train_ldm_output_root = Path('runs')
+train_ldm_save_every_epochs = 5
 train_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'
-train_vqvae_autoencoder_ckpt_name = 'vqvae_autoencoder_ckpt.pth'
-train_vae_autoencoder_ckpt_name = 'vae_autoencoder_ckpt.pth'
-train_vqvae_discriminator_ckpt_name = 'vqvae_discriminator_ckpt.pth'
-train_vae_discriminator_ckpt_name = 'vae_discriminator_ckpt.pth'
+train_text_encoder_ckpt_name = 'text_encoder_ckpt.pth'
+train_vqvae_autoencoder_ckpt_name = 'runs\vqvae_20251018-222220\celebhq\vqvae_autoencoder_ckpt_latest.pth'

@@ -49,24 +49,19 @@ def setup_seed(seed: int) -> None:
 
 
 def create_run_directories(root: Path) -> RunArtifacts:
-    timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
-    candidate = root / f'vqvae_{timestamp}'
-    suffix = 1
-    while candidate.exists():
-        suffix += 1
-        candidate = root / f'vqvae_{timestamp}_{suffix:02d}'
+    run_dir = root
+    checkpoints_dir = run_dir / 'checkpoints'
+    samples_dir = run_dir / 'samples'
+    logs_dir = run_dir / 'logs'
 
-    checkpoints_dir = candidate / 'checkpoints'
-    samples_dir = candidate / 'samples'
-    logs_dir = candidate / 'logs'
+    for path in (run_dir, checkpoints_dir, samples_dir, logs_dir):
+        path.mkdir(parents = True, exist_ok = True)
 
-    checkpoints_dir.mkdir(parents = True, exist_ok = False)
-    samples_dir.mkdir(parents = True, exist_ok = False)
-    logs_dir.mkdir(parents = True, exist_ok = False)
-
-    logger = logging.getLogger(f'vqvae_train_{candidate.name}')
+    logger = logging.getLogger('vqvae_train')
     logger.setLevel(logging.INFO)
     logger.propagate = False
+    if logger.handlers:
+        logger.handlers.clear()
 
     formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
@@ -79,7 +74,7 @@ def create_run_directories(root: Path) -> RunArtifacts:
     logger.addHandler(console_handler)
 
     return RunArtifacts(
-        run_dir = candidate,
+        run_dir = run_dir,
         checkpoints_dir = checkpoints_dir,
         samples_dir = samples_dir,
         logs_dir = logs_dir,
@@ -195,9 +190,10 @@ def save_weights(
         vqvae: VQVAE,
         discriminator: Discriminator,
         train_config: Dict[str, str],
+        run_artifacts: RunArtifacts,
         epoch_idx: int,
         ) -> Dict[str, Path]:
-    base_dir = Path(train_config.get('effective_task_dir', train_config['task_name']))
+    base_dir = run_artifacts.run_dir
     ensure_directory(base_dir)
 
     def _latest_name(original: str) -> str:
@@ -212,7 +208,7 @@ def save_weights(
     torch.save(vqvae.state_dict(), vqvae_base_path)
     torch.save(discriminator.state_dict(), discriminator_base_path)
 
-    checkpoints_dir = base_dir / 'checkpoints'
+    checkpoints_dir = run_artifacts.checkpoints_dir
     ensure_directory(checkpoints_dir)
     epoch_tag = f'epoch_{epoch_idx + 1:03d}'
 
@@ -284,13 +280,6 @@ def train(
 
     setup_seed(train_config['seed'])
 
-    train_config['run_dir'] = str(run_artifacts.run_dir)
-    train_config['checkpoints_dir'] = str(run_artifacts.checkpoints_dir)
-    train_config['samples_dir'] = str(run_artifacts.samples_dir)
-    train_config['logs_dir'] = str(run_artifacts.logs_dir)
-    task_dir_name = Path(train_config.get('task_name', 'vqvae_run')).name
-    effective_task_dir = run_artifacts.run_dir / task_dir_name
-    train_config['effective_task_dir'] = str(effective_task_dir)
     train_config['resumed_from'] = {
         'vqvae'        : resume_vqvae_checkpoint,
         'discriminator': resume_discriminator_checkpoint,
@@ -524,6 +513,7 @@ def train(
                 vqvae = vqvae,
                 discriminator = discriminator,
                 train_config = train_config,
+                run_artifacts = run_artifacts,
                 epoch_idx = epoch_idx,
                 )
             logger.info(
@@ -541,8 +531,8 @@ if __name__ == '__main__':
     config_path = 'config/celebhq.yaml'
     output_root = 'runs'
     save_every_epochs = 5
-    resume_vqvae_checkpoint = fr'runs/vqvae_20251018-164440/celebhq/vqvae_autoencoder_ckpt_latest.pth'
-    resume_discriminator_checkpoint = fr'runs/vqvae_20251018-164440/celebhq/vqvae_discriminator_ckpt_latest.pth'
+    resume_vqvae_checkpoint = fr'runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth'
+    resume_discriminator_checkpoint = fr'runs/vqvae_20251018-222220/celebhq/vqvae_discriminator_ckpt_latest.pth'
     train_imgs = None  # e.g. 500 to debug with a subset
 
     train(

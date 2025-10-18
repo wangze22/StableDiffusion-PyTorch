@@ -8,8 +8,9 @@ def get_tokenizer_and_model(model_type, device, eval_mode=True):
         text_tokenizer = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
         text_model = DistilBertModel.from_pretrained('distilbert-base-uncased').to(device)
     else:
-        text_tokenizer = CLIPTokenizer.from_pretrained('openai/clip-vit-base-patch16')
-        text_model = CLIPTextModel.from_pretrained('openai/clip-vit-base-patch16').to(device)
+        model_dir = r'models/clip-vit-b16'
+        text_tokenizer = CLIPTokenizer.from_pretrained(model_dir, local_files_only=True)
+        text_model = CLIPTextModel.from_pretrained(model_dir, local_files_only=True).to(device)
     if eval_mode:
         text_model.eval()
     return text_tokenizer, text_model

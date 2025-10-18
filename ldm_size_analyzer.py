@@ -1,3 +1,8 @@
+import os
+
+# Allow PyTorch and Intel OpenMP runtimes to coexist on Windows.
+os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+
 import torch
 
 import config.celebhq_params as cfg
