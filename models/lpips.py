@@ -88,9 +88,16 @@ class LPIPS(nn.Module):
         # Load the weights of trained LPIPS model
         import inspect
         import os
+        from torch.hub import load_state_dict_from_url
         model_path = os.path.abspath(
             os.path.join(inspect.getfile(self.__init__), '..', 'weights/v%s/%s.pth' % (version, net)))
         print('Loading model from: %s' % model_path)
+        if not os.path.exists(model_path):
+            os.makedirs(os.path.dirname(model_path), exist_ok=True)
+            # Fallback to public LPIPS weights if they are missing locally.
+            url = 'https://raw.githubusercontent.com/richzhang/PerceptualSimilarity/master/lpips/weights/v0.1/vgg.pth'
+            state_dict = load_state_dict_from_url(url, map_location=device)
+            torch.save(state_dict, model_path)
         self.load_state_dict(torch.load(model_path, map_location=device), strict=False)
         ########################
         

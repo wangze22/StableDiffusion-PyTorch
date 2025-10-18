@@ -11,8 +11,8 @@ from tqdm import tqdm
 
 label_list = ['skin', 'nose', 'eye_g', 'l_eye', 'r_eye', 'l_brow', 'r_brow', 'l_ear', 'r_ear', 'mouth', 'u_lip', 'l_lip', 'hair', 'hat', 'ear_r', 'neck_l', 'neck', 'cloth']
 
-folder_base = 'data/CelebAMask-HQ/CelebAMask-HQ-mask-anno'
-folder_save = 'data/CelebAMask-HQ/CelebAMask-HQ-mask'
+folder_base = fr'D:/datasets/CelebAMask-HQ/CelebAMask-HQ/CelebAMask-HQ-mask-anno'
+folder_save = fr'D:/datasets/CelebAMask-HQ/CelebAMask-HQ/CelebAMask-HQ-mask'
 img_num = 30000
 
 if not os.path.exists(folder_save):
