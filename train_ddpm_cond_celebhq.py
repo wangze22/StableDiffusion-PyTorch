@@ -1,7 +1,7 @@
-import argparse
 import csv
 import logging
 import random
+import re
 import sys
 from copy import deepcopy
 from dataclasses import dataclass
@@ -299,20 +299,37 @@ def load_config_from_module(module_path: str) -> Dict[str, Dict[str, Any]]:
         }
 
 
-def train(args):
-    config = load_config_from_module(args.config_module)
+def infer_epoch_from_path(path: Path) -> Optional[int]:
+    match = re.search(r'epoch_(\d+)', str(path))
+    if match:
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+    return None
+
+
+def train(
+        config_module: str,
+        output_root: Optional[str] = None,
+        save_every_epochs: Optional[int] = None,
+        resume_checkpoint: Optional[str] = None,
+        start_epoch: Optional[int] = None,
+        train_imgs: Optional[int] = None,
+        ) -> None:
+    config = load_config_from_module(config_module)
     dataset_config = deepcopy(config['dataset_params'])
     diffusion_config = deepcopy(config['diffusion_params'])
     diffusion_model_config = deepcopy(config['ldm_params'])
     autoencoder_model_config = deepcopy(config['autoencoder_params'])
     train_config = deepcopy(config['train_params'])
 
-    output_root_value = getattr(args, 'output_root', None) or train_config.get('ldm_output_root', 'runs')
-    output_root = Path(output_root_value)
-    run_artifacts = create_run_artifacts(output_root, train_config['task_name'])
+    output_root_value = output_root or train_config.get('ldm_output_root', 'runs')
+    output_root_path = Path(output_root_value)
+    run_artifacts = create_run_artifacts(output_root_path, train_config['task_name'])
     logger = run_artifacts.logger
 
-    logger.info('Loaded configuration module %s', args.config_module)
+    logger.info('Loaded configuration module %s', config_module)
     logger.info('Run directory: %s', run_artifacts.run_dir)
 
     if 'seed' in train_config and train_config['seed'] is not None:
@@ -320,15 +337,19 @@ def train(args):
         logger.info('Seed set to %d', train_config['seed'])
 
     snapshot = {
-        'config_module'     : args.config_module,
+        'config_module'     : config_module,
         'dataset_params'    : dataset_config,
         'diffusion_params'  : diffusion_config,
         'ldm_params'        : diffusion_model_config,
         'autoencoder_params': autoencoder_model_config,
         'train_params'      : {
             **train_config,
-            'resolved_output_root': str(output_root),
+            'resolved_output_root': str(output_root_path),
             'run_dir'             : str(run_artifacts.run_dir),
+            'save_every_override' : save_every_epochs,
+            'train_imgs_override' : train_imgs,
+            'resume_checkpoint'   : resume_checkpoint,
+            'start_epoch_override': start_epoch,
             },
         }
     with (run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
@@ -377,15 +398,24 @@ def train(args):
         condition_config = condition_config,
         )
 
+    use_latents = getattr(im_dataset, 'use_latents', False)
+    train_dataset = im_dataset
+
+    if train_imgs is not None and train_imgs > 0:
+        limit = min(train_imgs, len(im_dataset))
+        indices = torch.randperm(len(im_dataset))[:limit].tolist()
+        train_dataset = torch.utils.data.Subset(im_dataset, indices)
+        logger.info('Limiting dataset to %d images for training/debug.', limit)
+
     data_loader = DataLoader(
-        im_dataset,
+        train_dataset,
         batch_size = train_config['ldm_batch_size'],
         shuffle = True,
         )
 
-    logger.info('Dataset: %s | Samples: %d', dataset_config['name'], len(im_dataset))
+    logger.info('Dataset: %s | Samples: %d', dataset_config['name'], len(train_dataset))
     logger.info('Batch size: %d | Epochs: %d | Learning rate: %.6f', train_config['ldm_batch_size'], train_config['ldm_epochs'], train_config['ldm_lr'])
-    logger.info('Using latents: %s', im_dataset.use_latents)
+    logger.info('Using latents: %s', use_latents)
 
     scheduler = LinearNoiseScheduler(
         num_timesteps = diffusion_config['num_timesteps'],
@@ -400,7 +430,7 @@ def train(args):
     model.train()
 
     vae = None
-    if not im_dataset.use_latents:
+    if not use_latents:
         logger.info('Latents not found; loading VQ-VAE for on-the-fly encoding.')
         vae = VQVAE(
             im_channels = dataset_config['im_channels'],
@@ -419,14 +449,39 @@ def train(args):
         for param in vae.parameters():
             param.requires_grad = False
 
-    num_epochs = train_config['ldm_epochs']
+    num_epochs = int(train_config['ldm_epochs'])
     optimizer = Adam(model.parameters(), lr = train_config['ldm_lr'])
     criterion = torch.nn.MSELoss()
 
-    save_every = max(1, int(train_config.get('ldm_save_every_epochs', 1)))
+    ckpt_name = train_config.get('ldm_ckpt_name', 'ddpm_ckpt.pth')
+
+    start_epoch_value = max(0, start_epoch) if start_epoch is not None else 0
+    if resume_checkpoint is not None:
+        resume_path = Path(resume_checkpoint)
+        if not resume_path.exists():
+            raise FileNotFoundError(f'Diffusion model checkpoint not found at {resume_path}')
+        logger.info('Resuming diffusion model from checkpoint: %s', resume_path)
+        model.load_state_dict(torch.load(str(resume_path), map_location = device))
+        inferred_epoch = infer_epoch_from_path(resume_path)
+        if inferred_epoch is not None and start_epoch is None:
+            start_epoch_value = inferred_epoch
+        if start_epoch_value:
+            logger.info('Starting training from epoch %d', start_epoch_value + 1)
+
+    if start_epoch_value >= num_epochs:
+        logger.warning(
+            'Start epoch (%d) is greater than or equal to total epochs (%d); nothing to train.',
+            start_epoch_value,
+            num_epochs,
+            )
+        return
+
+    save_every_config = train_config.get('ldm_save_every_epochs')
+    resolved_save_every = save_every_epochs if save_every_epochs is not None else save_every_config
+    save_every = max(1, int(resolved_save_every)) if resolved_save_every is not None else 1
     loss_history: List[Dict[str, float]] = []
 
-    for epoch_idx in range(num_epochs):
+    for epoch_idx in range(start_epoch_value, num_epochs):
         epoch_losses: List[float] = []
 
         for data in tqdm(data_loader, desc = f'Epoch {epoch_idx + 1}/{num_epochs}', leave = False):
@@ -439,7 +494,7 @@ def train(args):
             optimizer.zero_grad()
             im = im.float().to(device)
 
-            if not im_dataset.use_latents:
+            if not use_latents:
                 assert vae is not None
                 with torch.no_grad():
                     im, _ = vae.encode(im)
@@ -511,7 +566,7 @@ def train(args):
         if should_save:
             checkpoint_paths = save_model_checkpoint(
                 model,
-                train_config['ldm_ckpt_name'],
+                ckpt_name,
                 run_artifacts,
                 epoch_idx,
                 )
@@ -525,16 +580,16 @@ def train(args):
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description = 'Arguments for ddpm training')
-    parser.add_argument(
-        '--config', dest = 'config_module',
-        default = 'config.celebhq_params', type = str,
-        help = 'Python module path for training configuration',
+    config_module = 'config.celebhq_params'
+    output_root = 'runs'
+    save_every_epochs = 5
+    resume_checkpoint = None
+    train_imgs = 100  # e.g. 500 to debug with a subset
+
+    train(
+        config_module = config_module,
+        output_root = output_root,
+        save_every_epochs = save_every_epochs,
+        resume_checkpoint = resume_checkpoint,
+        train_imgs = train_imgs,
         )
-    parser.add_argument(
-        '--output-root', dest = 'output_root',
-        default = None, type = str,
-        help = 'Optional override for output root directory',
-        )
-    args = parser.parse_args()
-    train(args)
