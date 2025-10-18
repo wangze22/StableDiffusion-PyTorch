@@ -18,6 +18,7 @@ import torch
 import torchvision
 import yaml
 from torch.optim import Adam
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 from tqdm import tqdm
@@ -340,6 +341,14 @@ def train(
     optimizer_d = Adam(discriminator.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
     optimizer_g = Adam(vqvae.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
 
+    min_lr = train_config.get('autoencoder_min_lr', train_config['autoencoder_lr'] * 0.1)
+    scheduler_kwargs = {
+        'T_max': max(1, train_config['autoencoder_epochs']),
+        'eta_min': min_lr,
+    }
+    scheduler_g = CosineAnnealingLR(optimizer_g, **scheduler_kwargs)
+    scheduler_d = CosineAnnealingLR(optimizer_d, **scheduler_kwargs)
+
     disc_step_start = train_config['disc_start']
     step_count = 0
     start_epoch = 0 if start_epoch is None else max(0, start_epoch)
@@ -366,6 +375,9 @@ def train(
         step_count = start_epoch * num_batches_per_epoch
         disc_step_start = 0  # ensure GAN losses are used when resuming
         logger.info('Resumed training from epoch index %d (next epoch %d)', start_epoch, start_epoch + 1)
+        if start_epoch > 0:
+            scheduler_g.step(start_epoch)
+            scheduler_d.step(start_epoch)
 
     num_epochs = train_config['autoencoder_epochs']
 
@@ -489,8 +501,9 @@ def train(
             )
         save_epoch_comparisons(epoch_idx, epoch_samples, run_artifacts.samples_dir)
 
+        current_lr = optimizer_g.param_groups[0]['lr']
         logger.info(
-            'Epoch %d/%d | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f',
+            'Epoch %d/%d | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f | LR: %.6f',
             epoch_idx + 1,
             num_epochs,
             epoch_recon_loss,
@@ -499,7 +512,11 @@ def train(
             epoch_commitment_loss,
             epoch_gen_adv_loss,
             epoch_disc_loss,
+            current_lr,
             )
+
+        scheduler_g.step()
+        scheduler_d.step()
 
         should_save = ((epoch_idx + 1) % save_every_epochs == 0) or (epoch_idx + 1 == num_epochs)
         if should_save:
@@ -523,10 +540,10 @@ def train(
 if __name__ == '__main__':
     config_path = 'config/celebhq.yaml'
     output_root = 'runs'
-    save_every_epochs = 1
-    resume_vqvae_checkpoint = fr'C:\Users\kidwz\Desktop\StableDiffusion-PyTorch\tools\celebhq\vqvae_autoencoder_ckpt.pth'
-    resume_discriminator_checkpoint = fr'C:\Users\kidwz\Desktop\StableDiffusion-PyTorch\tools\celebhq\vqvae_discriminator_ckpt.pth'
-    train_imgs = 128  # e.g. 500 to debug with a subset
+    save_every_epochs = 5
+    resume_vqvae_checkpoint = fr'runs/vqvae_20251018-164440/celebhq/vqvae_autoencoder_ckpt_latest.pth'
+    resume_discriminator_checkpoint = fr'runs/vqvae_20251018-164440/celebhq/vqvae_discriminator_ckpt_latest.pth'
+    train_imgs = 100  # e.g. 500 to debug with a subset
 
     train(
         config_path = config_path,

@@ -4,7 +4,7 @@ import yaml
 import torch
 
 from models.vqvae import VQVAE
-from models.unet_base import Unet as UNet
+from models.unet_cond_base import Unet as UNet
 
 
 def count_params(module: torch.nn.Module) -> int:
@@ -55,7 +55,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description='Inspect parameter sizes (in M) of core models')
-    parser.add_argument('--config', default='../config/celebhq.yaml', type=str,
+    parser.add_argument('--config', default='config/celebhq_text_image_cond.yaml', type=str,
                         help='Path to YAML config with VQVAE/UNet params')
     parser.add_argument('--no-clip', action='store_true', help='Skip CLIP model (avoids download)')
     parser.add_argument('--clip-path', type=str, default=None,

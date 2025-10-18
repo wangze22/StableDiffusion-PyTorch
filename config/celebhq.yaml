@@ -48,7 +48,7 @@ train_params:
   perceptual_weight: 1
   kl_weight: 0.000005
   ldm_epochs: 100
-  autoencoder_epochs: 20
+  autoencoder_epochs: 50
   num_samples: 1
   num_grid_rows: 1
   ldm_lr: 0.000005
