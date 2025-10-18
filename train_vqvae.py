@@ -543,7 +543,7 @@ if __name__ == '__main__':
     save_every_epochs = 5
     resume_vqvae_checkpoint = fr'runs/vqvae_20251018-164440/celebhq/vqvae_autoencoder_ckpt_latest.pth'
     resume_discriminator_checkpoint = fr'runs/vqvae_20251018-164440/celebhq/vqvae_discriminator_ckpt_latest.pth'
-    train_imgs = 100  # e.g. 500 to debug with a subset
+    train_imgs = None  # e.g. 500 to debug with a subset
 
     train(
         config_path = config_path,
