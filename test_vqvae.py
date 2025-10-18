@@ -86,7 +86,7 @@ def main():
     set_seed(seed_val)
 
     # Resolve checkpoint path using training script convention
-    ckpt_path = os.path.join(train_cfg['task_name'], train_cfg['vqvae_autoencoder_ckpt_name'])
+    ckpt_path = os.path.join('tools',train_cfg['task_name'], train_cfg['vqvae_autoencoder_ckpt_name'])
 
     # Resolve output directory
     output_dir = OUTPUT_DIR if OUTPUT_DIR is not None else os.path.join(train_cfg['task_name'], 'vqvae_test')
