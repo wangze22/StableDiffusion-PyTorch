@@ -96,4 +96,4 @@ train_ldm_output_root = Path('runs')
 train_ldm_save_every_epochs = 5
 train_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'
 train_text_encoder_ckpt_name = 'text_encoder_ckpt.pth'
-train_vqvae_autoencoder_ckpt_name = 'runs\vqvae_20251018-222220\celebhq\vqvae_autoencoder_ckpt_latest.pth'
+train_vqvae_autoencoder_ckpt_name = Path('runs') / 'vqvae_20251018-222220' / 'celebhq' / 'vqvae_autoencoder_ckpt_latest.pth'
