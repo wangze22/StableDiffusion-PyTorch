@@ -115,63 +115,61 @@ def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -
 
 
 def save_epoch_comparisons(
-    epoch_idx: int,
-    samples: List[Tuple[torch.Tensor, torch.Tensor]],
-    samples_dir: Path,
-) -> None:
+        epoch_idx: int,
+        samples: List[Tuple[torch.Tensor, torch.Tensor]],
+        samples_dir: Path,
+        ) -> None:
     if not samples:
         return
 
     epoch_dir = samples_dir / f'epoch_{epoch_idx + 1:03d}'
-    epoch_dir.mkdir(parents=True, exist_ok=True)
+    epoch_dir.mkdir(parents = True, exist_ok = True)
 
-    for sample_idx, (input_img, output_img) in enumerate(samples, start=1):
-        if sample_idx > 10:
-            break
+    limited_samples = samples[:10]
+    if not limited_samples:
+        return
 
-        # Clamp to expected range and map to [0, 1] for visualization.
-        def _prepare(tensor: torch.Tensor) -> torch.Tensor:
-            tensor = torch.clamp(tensor, -1.0, 1.0)
-            return (tensor + 1.0) / 2.0
+    def _prepare(tensor: torch.Tensor) -> torch.Tensor:
+        tensor = torch.clamp(tensor, -1.0, 1.0)
+        return (tensor + 1.0) / 2.0
 
-        comparison = torch.stack(
-            [_prepare(input_img), _prepare(output_img)],
-            dim=0,
-        )
-        grid = make_grid(comparison, nrow=2)
-        img = torchvision.transforms.ToPILImage()(grid)
-        img.save(epoch_dir / f'comparison_{sample_idx:02d}.png')
-        img.close()
+    inputs = torch.stack([_prepare(inp) for inp, _ in limited_samples], dim = 0)
+    outputs = torch.stack([_prepare(out) for _, out in limited_samples], dim = 0)
+    combined = torch.cat([inputs, outputs], dim = 0)
+    grid = make_grid(combined, nrow = len(limited_samples))
+    img = torchvision.transforms.ToPILImage()(grid)
+    img.save(epoch_dir / f'epoch_{epoch_idx + 1:03d}_comparisons.png')
+    img.close()
 
 
 def plot_epoch_losses(
-    epoch_idx: int,
-    step_losses: Dict[str, List[float]],
-    logs_dir: Path,
-) -> None:
+        epoch_idx: int,
+        step_losses: Dict[str, List[float]],
+        logs_dir: Path,
+        ) -> None:
     if not step_losses:
         return
 
     loss_dir = logs_dir / 'epoch_loss_plots'
-    loss_dir.mkdir(parents=True, exist_ok=True)
+    loss_dir.mkdir(parents = True, exist_ok = True)
 
-    plt.figure(figsize=(12, 8))
+    plt.figure(figsize = (12, 8))
     has_data = False
     display_names = {
-        'recon_loss': 'Reconstruction',
-        'perceptual_loss': 'Perceptual',
-        'codebook_loss': 'Codebook',
-        'commitment_loss': 'Commitment',
+        'recon_loss'        : 'Reconstruction',
+        'perceptual_loss'   : 'Perceptual',
+        'codebook_loss'     : 'Codebook',
+        'commitment_loss'   : 'Commitment',
         'generator_adv_loss': 'Generator Adversarial',
         'discriminator_loss': 'Discriminator',
-        'total_loss': 'Total',
-    }
+        'total_loss'        : 'Total',
+        }
 
     for key, values in step_losses.items():
         if not values:
             continue
         steps = np.arange(1, len(values) + 1)
-        plt.plot(steps, values, label=display_names.get(key, key))
+        plt.plot(steps, values, label = display_names.get(key, key))
         has_data = True
 
     if not has_data:
@@ -182,26 +180,33 @@ def plot_epoch_losses(
     plt.ylabel('Loss')
     plt.title(f'Epoch {epoch_idx + 1} Losses')
     plt.legend()
-    plt.grid(True, linestyle='--', linewidth=0.5, alpha=0.7)
+    plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
     plt.tight_layout()
     plt.savefig(loss_dir / f'epoch_{epoch_idx + 1:03d}_losses.png')
     plt.close()
 
+
 def ensure_directory(path: Path) -> None:
-    path.mkdir(parents=True, exist_ok=True)
+    path.mkdir(parents = True, exist_ok = True)
 
 
 def save_weights(
-    vqvae: VQVAE,
-    discriminator: Discriminator,
-    train_config: Dict[str, str],
-    epoch_idx: int,
-) -> Dict[str, Path]:
+        vqvae: VQVAE,
+        discriminator: Discriminator,
+        train_config: Dict[str, str],
+        epoch_idx: int,
+        ) -> Dict[str, Path]:
     base_dir = Path(train_config.get('effective_task_dir', train_config['task_name']))
     ensure_directory(base_dir)
 
-    vqvae_base_path = base_dir / train_config['vqvae_autoencoder_ckpt_name']
-    discriminator_base_path = base_dir / train_config['vqvae_discriminator_ckpt_name']
+    def _latest_name(original: str) -> str:
+        original_path = Path(original)
+        if original_path.suffix:
+            return f'{original_path.stem}_latest{original_path.suffix}'
+        return f'{original_path.name}_latest'
+
+    vqvae_base_path = base_dir / _latest_name(train_config['vqvae_autoencoder_ckpt_name'])
+    discriminator_base_path = base_dir / _latest_name(train_config['vqvae_discriminator_ckpt_name'])
 
     torch.save(vqvae.state_dict(), vqvae_base_path)
     torch.save(discriminator.state_dict(), discriminator_base_path)
@@ -217,21 +222,21 @@ def save_weights(
     torch.save(discriminator.state_dict(), discriminator_epoch_path)
 
     return {
-        'vqvae': vqvae_epoch_path,
-        'discriminator': discriminator_epoch_path,
-        'vqvae_latest': vqvae_base_path,
+        'vqvae'               : vqvae_epoch_path,
+        'discriminator'       : discriminator_epoch_path,
+        'vqvae_latest'        : vqvae_base_path,
         'discriminator_latest': discriminator_base_path,
-    }
+        }
 
 
 def load_weights(
-    vqvae_checkpoint_path: Path,
-    discriminator_checkpoint_path: Path,
-    vqvae: VQVAE,
-    discriminator: Discriminator,
-) -> None:
-    vqvae.load_state_dict(torch.load(vqvae_checkpoint_path, map_location=device))
-    discriminator.load_state_dict(torch.load(discriminator_checkpoint_path, map_location=device))
+        vqvae_checkpoint_path: Path,
+        discriminator_checkpoint_path: Path,
+        vqvae: VQVAE,
+        discriminator: Discriminator,
+        ) -> None:
+    vqvae.load_state_dict(torch.load(vqvae_checkpoint_path, map_location = device))
+    discriminator.load_state_dict(torch.load(discriminator_checkpoint_path, map_location = device))
 
 
 def infer_epoch_from_path(path: Path) -> Optional[int]:
@@ -286,9 +291,9 @@ def train(
     effective_task_dir = run_artifacts.run_dir / task_dir_name
     train_config['effective_task_dir'] = str(effective_task_dir)
     train_config['resumed_from'] = {
-        'vqvae': resume_vqvae_checkpoint,
+        'vqvae'        : resume_vqvae_checkpoint,
         'discriminator': resume_discriminator_checkpoint,
-    }
+        }
 
     with (run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
         yaml.safe_dump(
@@ -413,8 +418,8 @@ def train(
                 disc_fake_pred = discriminator(output)
                 disc_fake_loss = disc_criterion(
                     disc_fake_pred,
-                    torch.ones_like(disc_fake_pred, device=disc_fake_pred.device),
-                )
+                    torch.ones_like(disc_fake_pred, device = disc_fake_pred.device),
+                    )
                 adv_loss = train_config['disc_weight'] * disc_fake_loss
 
             total_generator_loss = recon_loss + codebook_loss + commitment_loss + perceptual_loss + adv_loss
@@ -470,18 +475,18 @@ def train(
         loss_history.append(loss_entry)
         persist_loss_history(loss_history, run_artifacts.logs_dir)
         plot_epoch_losses(
-            epoch_idx=epoch_idx,
-            step_losses={
-                'recon_loss': recon_losses,
-                'perceptual_loss': perceptual_losses,
-                'codebook_loss': codebook_losses,
-                'commitment_loss': commitment_losses,
+            epoch_idx = epoch_idx,
+            step_losses = {
+                'recon_loss'        : recon_losses,
+                'perceptual_loss'   : perceptual_losses,
+                'codebook_loss'     : codebook_losses,
+                'commitment_loss'   : commitment_losses,
                 'generator_adv_loss': generator_adv_losses,
                 'discriminator_loss': discriminator_losses,
-                'total_loss': total_losses,
-            },
-            logs_dir=run_artifacts.logs_dir,
-        )
+                'total_loss'        : total_losses,
+                },
+            logs_dir = run_artifacts.logs_dir,
+            )
         save_epoch_comparisons(epoch_idx, epoch_samples, run_artifacts.samples_dir)
 
         logger.info(
@@ -503,14 +508,14 @@ def train(
                 discriminator = discriminator,
                 train_config = train_config,
                 epoch_idx = epoch_idx,
-            )
+                )
             logger.info(
                 'Saved checkpoints: latest_vqvae=%s latest_disc=%s epoch_vqvae=%s epoch_disc=%s',
                 checkpoint_paths['vqvae_latest'],
                 checkpoint_paths['discriminator_latest'],
                 checkpoint_paths['vqvae'],
                 checkpoint_paths['discriminator'],
-            )
+                )
 
     logger.info('Training complete. Artifacts stored in %s', run_artifacts.run_dir)
 
@@ -524,10 +529,10 @@ if __name__ == '__main__':
     train_imgs = 128  # e.g. 500 to debug with a subset
 
     train(
-        config_path=config_path,
-        output_root=output_root,
-        save_every_epochs=save_every_epochs,
-        resume_vqvae_checkpoint=resume_vqvae_checkpoint,
-        resume_discriminator_checkpoint=resume_discriminator_checkpoint,
-        train_imgs=train_imgs,
-    )
+        config_path = config_path,
+        output_root = output_root,
+        save_every_epochs = save_every_epochs,
+        resume_vqvae_checkpoint = resume_vqvae_checkpoint,
+        resume_discriminator_checkpoint = resume_discriminator_checkpoint,
+        train_imgs = train_imgs,
+        )
