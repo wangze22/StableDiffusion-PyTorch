@@ -72,7 +72,7 @@ autoencoder_num_up_layers = 2
 # ===============
 train_seed = 1111
 train_task_name = 'celebhq'
-train_ldm_batch_size = 16
+train_ldm_batch_size = 32
 train_autoencoder_batch_size = 4
 train_disc_start = 15000
 train_disc_weight = 5.0

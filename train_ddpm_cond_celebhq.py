@@ -27,6 +27,10 @@ from utils.text_utils import *
 from utils.config_utils import *
 from utils.diffusion_utils import *
 
+os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
@@ -584,7 +588,7 @@ if __name__ == '__main__':
     output_root = 'runs'
     save_every_epochs = 5
     resume_checkpoint = None
-    train_imgs = 100  # e.g. 500 to debug with a subset
+    train_imgs = None  # e.g. 500 to debug with a subset
 
     train(
         config_module = config_module,
