@@ -3,12 +3,14 @@ import argparse
 import numpy as np
 from tqdm import tqdm
 from torch.optim import Adam
-from dataset.mnist_dataset import MnistDataset
 from dataset.celeb_dataset import CelebDataset
 from torch.utils.data import DataLoader
+
 from models.unet_cond_base import Unet
 from models.vqvae import VQVAE
+
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
+
 from utils.text_utils import *
 from utils.config_utils import *
 from utils.diffusion_utils import *
@@ -62,7 +64,6 @@ def train(args):
                 empty_text_embed = get_text_representation([''], text_tokenizer, text_model, device)
 
     im_dataset_cls = {
-        'mnist'  : MnistDataset,
         'celebhq': CelebDataset,
         }.get(dataset_config['name'])
 
@@ -174,19 +175,7 @@ def train(args):
                     'cond_drop_prob', 0.,
                     )
                 cond_input['image'] = drop_image_condition(cond_input_image, im, im_drop_prob)
-            if 'class' in condition_types:
-                assert 'class' in cond_input, 'Conditioning Type Class but no class conditioning input present'
-                validate_class_config(condition_config)
-                class_condition = torch.nn.functional.one_hot(
-                    cond_input['class'],
-                    condition_config['class_condition_config']['num_classes'],
-                    ).to(device)
-                class_drop_prob = get_config_value(
-                    condition_config['class_condition_config'],
-                    'cond_drop_prob', 0.,
-                    )
-                # Drop condition
-                cond_input['class'] = drop_class_condition(class_condition, class_drop_prob, im)
+
             ################################################
 
             # Sample random noise
@@ -222,7 +211,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Arguments for ddpm training')
     parser.add_argument(
         '--config', dest = 'config_path',
-        default = 'config/celebhq_text_cond_clip.yaml', type = str,
+        default = '../config/celebhq_text_cond_clip.yaml', type = str,
         )
     args = parser.parse_args()
     train(args)

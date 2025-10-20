@@ -38,7 +38,7 @@ autoencoder_params:
 
 train_params:
   seed : 1111
-  task_name: 'celebhq'
+  task_name: 'gen_latents_celebhq'
   ldm_batch_size: 16
   autoencoder_batch_size: 64
   disc_start: 15000
@@ -59,7 +59,7 @@ train_params:
   vae_latent_dir_name: 'vae_latents'
   vqvae_latent_dir_name: 'vqvae_latents'
   ldm_ckpt_name: 'ddpm_ckpt.pth'
-  vqvae_autoencoder_ckpt_name: 'vqvae_autoencoder_ckpt.pth'
+  vqvae_autoencoder_ckpt_name: '../model_pths/vqvae_autoencoder_ckpt_latest.pth'
   vae_autoencoder_ckpt_name: 'vae_autoencoder_ckpt.pth'
   vqvae_discriminator_ckpt_name: 'vqvae_discriminator_ckpt.pth'
   vae_discriminator_ckpt_name: 'vae_discriminator_ckpt.pth'

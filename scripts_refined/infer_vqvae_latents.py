@@ -32,7 +32,6 @@ def infer(args):
     
     # Create the dataset
     im_dataset_cls = {
-        'mnist': MnistDataset,
         'celebhq': CelebDataset,
     }.get(dataset_config['name'])
     
@@ -56,8 +55,7 @@ def infer(args):
     
     model = VQVAE(im_channels=dataset_config['im_channels'],
                   model_config=autoencoder_config).to(device)
-    model.load_state_dict(torch.load(os.path.join(train_config['task_name'],
-                                                    train_config['vqvae_autoencoder_ckpt_name']),
+    model.load_state_dict(torch.load(train_config['vqvae_autoencoder_ckpt_name'],
                                      map_location=device))
     model.eval()
     
@@ -114,6 +112,6 @@ def infer(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Arguments for vq vae inference')
     parser.add_argument('--config', dest='config_path',
-                        default='../config/celebhq.yaml', type=str)
+                        default='../config/celebhq_infer_latents.yaml', type=str)
     args = parser.parse_args()
     infer(args)

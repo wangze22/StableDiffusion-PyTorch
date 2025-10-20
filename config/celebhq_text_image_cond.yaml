@@ -54,22 +54,11 @@ train_params:
   seed : 1111
   task_name: 'celebhq'
   ldm_batch_size: 16
-  autoencoder_batch_size: 4
-  disc_start: 15000
-  disc_weight: 0.5
-  codebook_weight: 1
-  commitment_beta: 0.2
-  perceptual_weight: 1
-  kl_weight: 0.000005
   ldm_epochs: 100
-  autoencoder_epochs: 20
   num_samples: 1
   num_grid_rows: 1
-  ldm_lr: 0.000005
-  autoencoder_lr: 0.00001
-  autoencoder_acc_steps: 4
-  autoencoder_img_save_steps: 64
-  save_latents : False
+  ldm_lr: 1e-4
+  save_latents : True
   cf_guidance_scale : 1.0
   vae_latent_dir_name: 'vae_latents'
   vqvae_latent_dir_name: 'vqvae_latents'
