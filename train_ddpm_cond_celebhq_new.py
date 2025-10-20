@@ -17,7 +17,7 @@ from models.unet_cond_base import Unet
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
 from config import celebhq_text_image_cond as cfg
-from utils.config_utils import *
+from utils.config_utils import validate_image_config, validate_text_config
 from utils.diffusion_utils import *
 from utils.text_utils import *
 from utils.train_utils import (
@@ -32,27 +32,54 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def train(num_images: int = None):
-    diffusion_config = cfg.diffusion_params
-    dataset_config = cfg.dataset_params
-    diffusion_model_config = cfg.ldm_params
-    autoencoder_model_config = cfg.autoencoder_params
-    train_config = cfg.train_params
-    model_pth_config = cfg.model_paths
-    run_artifacts = create_run_artifacts(train_config)
+    condition_config = {
+        'condition_types': cfg.ldm_condition_types,
+        'text_condition_config': {
+            'text_embed_model': cfg.ldm_text_condition_text_embed_model,
+            'train_text_embed_model': cfg.ldm_text_condition_train_text_embed_model,
+            'text_embed_dim': cfg.ldm_text_condition_text_embed_dim,
+            'cond_drop_prob': cfg.ldm_text_condition_cond_drop_prob,
+            },
+        'image_condition_config': {
+            'image_condition_input_channels': cfg.ldm_image_condition_input_channels,
+            'image_condition_output_channels': cfg.ldm_image_condition_output_channels,
+            'image_condition_h': cfg.ldm_image_condition_h,
+            'image_condition_w': cfg.ldm_image_condition_w,
+            'cond_drop_prob': cfg.ldm_image_condition_cond_drop_prob,
+            },
+        }
+    diffusion_model_config = {
+        'down_channels': cfg.ldm_down_channels,
+        'mid_channels': cfg.ldm_mid_channels,
+        'down_sample': cfg.ldm_down_sample,
+        'attn_down': cfg.ldm_attn_down,
+        'time_emb_dim': cfg.ldm_time_emb_dim,
+        'norm_channels': cfg.ldm_norm_channels,
+        'num_heads': cfg.ldm_num_heads,
+        'conv_out_channels': cfg.ldm_conv_out_channels,
+        'num_down_layers': cfg.ldm_num_down_layers,
+        'num_mid_layers': cfg.ldm_num_mid_layers,
+        'num_up_layers': cfg.ldm_num_up_layers,
+        'condition_config': condition_config,
+        }
+    run_artifacts = create_run_artifacts({
+        'task_name': cfg.train_task_name,
+        'ldm_output_root': cfg.train_ldm_output_root,
+        })
     logger: logging.Logger = run_artifacts['logger']
     logger.info('Loaded config from celebhq_text_image_cond module')
     logger.info('Run artifacts directory: %s', run_artifacts['run_dir'])
 
-    save_every = max(1, int(train_config.get('ldm_save_every_epochs', 1)))
+    save_every = max(1, int(cfg.train_ldm_save_every_epochs))
     loss_history: List[Dict[str, float]] = []
-    legacy_ckpt_dir = Path(train_config['task_name'])
+    legacy_ckpt_dir = Path(cfg.train_task_name)
     ensure_directory(legacy_ckpt_dir)
 
     ########## Create the noise scheduler #############
     scheduler = LinearNoiseScheduler(
-        num_timesteps = diffusion_config['num_timesteps'],
-        beta_start = diffusion_config['beta_start'],
-        beta_end = diffusion_config['beta_end'],
+        num_timesteps = cfg.diffusion_num_timesteps,
+        beta_start = cfg.diffusion_beta_start,
+        beta_end = cfg.diffusion_beta_end,
         )
     ###############################################
 
@@ -61,33 +88,30 @@ def train(num_images: int = None):
     text_model = None
     empty_text_embed = None
     condition_types = []
-    condition_config = get_config_value(diffusion_model_config, key = 'condition_config', default_value = None)
     if condition_config is not None:
-        assert 'condition_types' in condition_config, \
-            "condition type missing in conditioning config"
-        condition_types = condition_config['condition_types']
+        condition_types = list(cfg.ldm_condition_types)
         if 'text' in condition_types:
             validate_text_config(condition_config)
             with torch.no_grad():
                 # Load tokenizer and text model based on config
                 # Also get empty text representation
                 text_tokenizer, text_model = get_tokenizer_and_model(
-                    condition_config['text_condition_config']
-                    ['text_embed_model'], device = device,
+                    cfg.ldm_text_condition_text_embed_model,
+                    device = device,
                     )
                 empty_text_embed = get_text_representation([''], text_tokenizer, text_model, device)
 
     im_dataset_cls = {
         'celebhq': CelebDataset,
-        }.get(dataset_config['name'])
+        }.get(cfg.dataset_name)
 
     im_dataset = im_dataset_cls(
         split = 'train',
-        im_path = dataset_config['im_path'],
-        im_size = dataset_config['im_size'],
-        im_channels = dataset_config['im_channels'],
+        im_path = cfg.dataset_im_path,
+        im_size = cfg.dataset_im_size,
+        im_channels = cfg.dataset_im_channels,
         use_latents = True,
-        latent_path = train_config['vqvae_latent_dir_name'],
+        latent_path = cfg.train_vqvae_latent_dir_name,
         condition_config = condition_config,
         )
     if num_images is not None:
@@ -96,24 +120,24 @@ def train(num_images: int = None):
 
     data_loader = DataLoader(
         im_dataset,
-        batch_size = train_config['ldm_batch_size'],
+        batch_size = cfg.train_ldm_batch_size,
         shuffle = True,
         )
 
     # Instantiate the unet model
     model = Unet(
-        im_channels = autoencoder_model_config['z_channels'],
+        im_channels = cfg.autoencoder_z_channels,
         model_config = diffusion_model_config,
         ).to(device)
-    resume_path = model_pth_config['ldm_ckpt_resume']
+    resume_path = cfg.model_paths_ldm_ckpt_resume
     if resume_path is not None:
         model.load_state_dict(torch.load(str(resume_path), map_location = device))
         logger.info(f'Loaded ldm model {resume_path}')
     model.train()
 
     # Specify training parameters
-    num_epochs = train_config['ldm_epochs']
-    optimizer = Adam(model.parameters(), lr = train_config['ldm_lr'])
+    num_epochs = cfg.train_ldm_epochs
+    optimizer = Adam(model.parameters(), lr = cfg.train_ldm_lr)
     criterion = torch.nn.MSELoss()
 
     lr_scheduler = ReduceLROnPlateau(
@@ -146,10 +170,7 @@ def train(num_images: int = None):
                         text_model,
                         device,
                         )
-                    text_drop_prob = get_config_value(
-                        condition_config['text_condition_config'],
-                        'cond_drop_prob', 0.,
-                        )
+                    text_drop_prob = cfg.ldm_text_condition_cond_drop_prob
                     text_condition = drop_text_condition(text_condition, im, empty_text_embed, text_drop_prob)
                     cond_input['text'] = text_condition
             if 'image' in condition_types:
@@ -157,10 +178,7 @@ def train(num_images: int = None):
                 validate_image_config(condition_config)
                 cond_input_image = cond_input['image'].to(device)
                 # Drop condition
-                im_drop_prob = get_config_value(
-                    condition_config['image_condition_config'],
-                    'cond_drop_prob', 0.,
-                    )
+                im_drop_prob = cfg.ldm_image_condition_cond_drop_prob
                 cond_input['image'] = drop_image_condition(cond_input_image, im, im_drop_prob)
 
             ################################################
@@ -169,7 +187,7 @@ def train(num_images: int = None):
             noise = torch.randn_like(im).to(device)
 
             # Sample timestep
-            t = torch.randint(0, diffusion_config['num_timesteps'], (im.shape[0],)).to(device)
+            t = torch.randint(0, cfg.diffusion_num_timesteps, (im.shape[0],)).to(device)
 
             # Add noise to images according to timestep
             noisy_im = scheduler.add_noise(im, noise, t)
@@ -197,11 +215,11 @@ def train(num_images: int = None):
         if should_save:
             state_dict = model.state_dict()
             checkpoints_dir = run_artifacts['checkpoints_dir']
-            latest_ckpt_path = checkpoints_dir / model_pth_config['ldm_ckpt_name']
-            epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{model_pth_config["ldm_ckpt_name"]}'
+            latest_ckpt_path = checkpoints_dir / cfg.model_paths_ldm_ckpt_name
+            epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{cfg.model_paths_ldm_ckpt_name}'
             torch.save(state_dict, latest_ckpt_path)
             torch.save(state_dict, epoch_ckpt_path)
-            legacy_ckpt_path = legacy_ckpt_dir / model_pth_config['ldm_ckpt_name']
+            legacy_ckpt_path = legacy_ckpt_dir / cfg.model_paths_ldm_ckpt_name
             torch.save(state_dict, legacy_ckpt_path)
             logger.info(
                 'Saved checkpoints: latest=%s | epoch=%s',
