@@ -75,10 +75,13 @@ def infer(args):
         encoder_grid = torchvision.transforms.ToPILImage()(encoder_grid)
         decoder_grid = torchvision.transforms.ToPILImage()(decoder_grid)
         input_grid = torchvision.transforms.ToPILImage()(input_grid)
+
+        output_dir = train_config['task_name']
+        os.makedirs(output_dir, exist_ok=True)
         
-        input_grid.save(os.path.join(train_config['task_name'], 'input_samples.png'))
-        encoder_grid.save(os.path.join(train_config['task_name'], 'encoded_samples.png'))
-        decoder_grid.save(os.path.join(train_config['task_name'], 'reconstructed_samples.png'))
+        input_grid.save(os.path.join(output_dir, 'input_samples.png'))
+        encoder_grid.save(os.path.join(output_dir, 'encoded_samples.png'))
+        decoder_grid.save(os.path.join(output_dir, 'reconstructed_samples.png'))
         
         if train_config['save_latents']:
             # save Latents (but in a very unoptimized way)
@@ -87,7 +90,7 @@ def infer(args):
                                                    '*.pkl'))
             assert len(latent_fnames) == 0, 'Latents already present. Delete all latent files and re-run'
             if not os.path.exists(latent_path):
-                os.mkdir(latent_path)
+                os.makedirs(latent_path, exist_ok=True)
             print('Saving Latents for {}'.format(dataset_config['name']))
             
             fname_latent_map = {}
