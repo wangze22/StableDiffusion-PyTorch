@@ -60,14 +60,40 @@ train_num_grid_rows = 1
 train_ldm_lr = 1e-4
 train_save_latents = True
 train_cf_guidance_scale = 1.0
-train_vae_latent_dir_name = 'vae_latents'
 train_vqvae_latent_dir_name = 'vqvae_latents'
 train_ldm_save_every_epochs = 1
 
 # Model paths
 model_paths_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'
-model_paths_ldm_ckpt_resume = 'model_pths/ddpm_ckpt_text_image_cond_clip_latest.pth'
-model_paths_vqvae_autoencoder_ckpt_name = 'vqvae_autoencoder_ckpt.pth'
-model_paths_vae_autoencoder_ckpt_name = 'vae_autoencoder_ckpt.pth'
-model_paths_vqvae_discriminator_ckpt_name = 'vqvae_discriminator_ckpt.pth'
-model_paths_vae_discriminator_ckpt_name = 'vae_discriminator_ckpt.pth'
+model_paths_ldm_ckpt_resume = 'runs/ddpm_20251020-193017/celebhq/checkpoints/ddpm_ckpt_text_image_cond_clip.pth'
+
+condition_config = {
+    'condition_types'       : ldm_condition_types,
+    'text_condition_config' : {
+        'text_embed_model'      : ldm_text_condition_text_embed_model,
+        'train_text_embed_model': ldm_text_condition_train_text_embed_model,
+        'text_embed_dim'        : ldm_text_condition_text_embed_dim,
+        'cond_drop_prob'        : ldm_text_condition_cond_drop_prob,
+        },
+    'image_condition_config': {
+        'image_condition_input_channels' : ldm_image_condition_input_channels,
+        'image_condition_output_channels': ldm_image_condition_output_channels,
+        'image_condition_h'              : ldm_image_condition_h,
+        'image_condition_w'              : ldm_image_condition_w,
+        'cond_drop_prob'                 : ldm_image_condition_cond_drop_prob,
+        },
+    }
+diffusion_model_config = {
+    'down_channels'    : ldm_down_channels,
+    'mid_channels'     : ldm_mid_channels,
+    'down_sample'      : ldm_down_sample,
+    'attn_down'        : ldm_attn_down,
+    'time_emb_dim'     : ldm_time_emb_dim,
+    'norm_channels'    : ldm_norm_channels,
+    'num_heads'        : ldm_num_heads,
+    'conv_out_channels': ldm_conv_out_channels,
+    'num_down_layers'  : ldm_num_down_layers,
+    'num_mid_layers'   : ldm_num_mid_layers,
+    'num_up_layers'    : ldm_num_up_layers,
+    'condition_config' : condition_config,
+    }

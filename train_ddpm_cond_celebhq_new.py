@@ -32,36 +32,6 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
 def train(num_images: int = None):
-    condition_config = {
-        'condition_types': cfg.ldm_condition_types,
-        'text_condition_config': {
-            'text_embed_model': cfg.ldm_text_condition_text_embed_model,
-            'train_text_embed_model': cfg.ldm_text_condition_train_text_embed_model,
-            'text_embed_dim': cfg.ldm_text_condition_text_embed_dim,
-            'cond_drop_prob': cfg.ldm_text_condition_cond_drop_prob,
-            },
-        'image_condition_config': {
-            'image_condition_input_channels': cfg.ldm_image_condition_input_channels,
-            'image_condition_output_channels': cfg.ldm_image_condition_output_channels,
-            'image_condition_h': cfg.ldm_image_condition_h,
-            'image_condition_w': cfg.ldm_image_condition_w,
-            'cond_drop_prob': cfg.ldm_image_condition_cond_drop_prob,
-            },
-        }
-    diffusion_model_config = {
-        'down_channels': cfg.ldm_down_channels,
-        'mid_channels': cfg.ldm_mid_channels,
-        'down_sample': cfg.ldm_down_sample,
-        'attn_down': cfg.ldm_attn_down,
-        'time_emb_dim': cfg.ldm_time_emb_dim,
-        'norm_channels': cfg.ldm_norm_channels,
-        'num_heads': cfg.ldm_num_heads,
-        'conv_out_channels': cfg.ldm_conv_out_channels,
-        'num_down_layers': cfg.ldm_num_down_layers,
-        'num_mid_layers': cfg.ldm_num_mid_layers,
-        'num_up_layers': cfg.ldm_num_up_layers,
-        'condition_config': condition_config,
-        }
     run_artifacts = create_run_artifacts({
         'task_name': cfg.train_task_name,
         'ldm_output_root': cfg.train_ldm_output_root,
@@ -88,10 +58,10 @@ def train(num_images: int = None):
     text_model = None
     empty_text_embed = None
     condition_types = []
-    if condition_config is not None:
+    if cfg.condition_config is not None:
         condition_types = list(cfg.ldm_condition_types)
         if 'text' in condition_types:
-            validate_text_config(condition_config)
+            validate_text_config(cfg.condition_config)
             with torch.no_grad():
                 # Load tokenizer and text model based on config
                 # Also get empty text representation
@@ -112,7 +82,7 @@ def train(num_images: int = None):
         im_channels = cfg.dataset_im_channels,
         use_latents = True,
         latent_path = cfg.train_vqvae_latent_dir_name,
-        condition_config = condition_config,
+        condition_config = cfg.condition_config,
         )
     if num_images is not None:
         max_samples = min(num_images, len(im_dataset))
@@ -127,7 +97,7 @@ def train(num_images: int = None):
     # Instantiate the unet model
     model = Unet(
         im_channels = cfg.autoencoder_z_channels,
-        model_config = diffusion_model_config,
+        model_config = cfg.diffusion_model_config,
         ).to(device)
     resume_path = cfg.model_paths_ldm_ckpt_resume
     if resume_path is not None:
@@ -152,7 +122,7 @@ def train(num_images: int = None):
         epoch_losses: List[float] = []
         for data in tqdm(data_loader, desc = f'Epoch {epoch_idx + 1}/{num_epochs}', leave = False):
             cond_input = None
-            if condition_config is not None:
+            if cfg.condition_config is not None:
                 im, cond_input = data
             else:
                 im = data
@@ -163,7 +133,7 @@ def train(num_images: int = None):
             if 'text' in condition_types:
                 with torch.no_grad():
                     assert 'text' in cond_input, 'Conditioning Type Text but no text conditioning input present'
-                    validate_text_config(condition_config)
+                    validate_text_config(cfg.condition_config)
                     text_condition = get_text_representation(
                         cond_input['text'],
                         text_tokenizer,
@@ -175,7 +145,7 @@ def train(num_images: int = None):
                     cond_input['text'] = text_condition
             if 'image' in condition_types:
                 assert 'image' in cond_input, 'Conditioning Type Image but no image conditioning input present'
-                validate_image_config(condition_config)
+                validate_image_config(cfg.condition_config)
                 cond_input_image = cond_input['image'].to(device)
                 # Drop condition
                 im_drop_prob = cfg.ldm_image_condition_cond_drop_prob
@@ -205,6 +175,7 @@ def train(num_images: int = None):
             epoch_idx + 1,
             num_epochs,
             avg_loss,
+            current_lr
             )
 
         loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
@@ -215,7 +186,7 @@ def train(num_images: int = None):
         if should_save:
             state_dict = model.state_dict()
             checkpoints_dir = run_artifacts['checkpoints_dir']
-            latest_ckpt_path = checkpoints_dir / cfg.model_paths_ldm_ckpt_name
+            latest_ckpt_path = run_artifacts['run_dir'] / cfg.model_paths_ldm_ckpt_name
             epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{cfg.model_paths_ldm_ckpt_name}'
             torch.save(state_dict, latest_ckpt_path)
             torch.save(state_dict, epoch_ckpt_path)
@@ -232,5 +203,5 @@ def train(num_images: int = None):
 
 
 if __name__ == '__main__':
-    num_images = 30000
+    num_images = 3000000
     train(num_images = num_images)
