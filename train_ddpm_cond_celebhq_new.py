@@ -10,6 +10,7 @@ from dataset.celeb_dataset import CelebDataset
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 from models.unet_cond_base import Unet
 
@@ -25,6 +26,7 @@ from utils.train_utils import (
     persist_loss_history,
     plot_epoch_loss_curve,
     )
+
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -114,6 +116,12 @@ def train(num_images: int = None):
     optimizer = Adam(model.parameters(), lr = train_config['ldm_lr'])
     criterion = torch.nn.MSELoss()
 
+    lr_scheduler = ReduceLROnPlateau(
+        optimizer,
+        patience = 5,
+        factor = 0.5,
+        min_lr = 1e-7,
+        )
 
     # Run training
     for epoch_idx in range(num_epochs):
@@ -172,8 +180,10 @@ def train(num_images: int = None):
             optimizer.step()
 
         avg_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        lr_scheduler.step(avg_loss)
+        current_lr = optimizer.param_groups[0]['lr']
         logger.info(
-            'Epoch %d/%d | Loss: %.4f',
+            'Epoch %d/%d | Loss: %.4f | LR: %.6f',
             epoch_idx + 1,
             num_epochs,
             avg_loss,
