@@ -15,6 +15,7 @@ import numpy as np
 import torch
 import yaml
 from torch.optim import Adam
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -29,10 +30,6 @@ from utils.diffusion_utils import *
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
-
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-
 
 @dataclass
 class RunArtifacts:
@@ -455,6 +452,21 @@ def train(
 
     num_epochs = int(train_config['ldm_epochs'])
     optimizer = Adam(model.parameters(), lr = train_config['ldm_lr'])
+    lr_scheduler_params = {
+        'mode'          : train_config.get('ldm_scheduler_mode', 'min'),
+        'factor'        : train_config.get('ldm_scheduler_factor', 0.5),
+        'patience'      : train_config.get('ldm_scheduler_patience', 5),
+        'cooldown'      : train_config.get('ldm_scheduler_cooldown', 0),
+        'min_lr'        : train_config.get('ldm_scheduler_min_lr', 1e-6),
+        }
+    lr_scheduler = ReduceLROnPlateau(optimizer, **lr_scheduler_params)
+    logger.info(
+        'ReduceLROnPlateau scheduler enabled | factor=%.3f | patience=%d | min_lr=%.2e | cooldown=%d',
+        lr_scheduler_params['factor'],
+        lr_scheduler_params['patience'],
+        lr_scheduler_params['min_lr'],
+        lr_scheduler_params['cooldown'],
+        )
     criterion = torch.nn.MSELoss()
 
     ckpt_name = train_config.get('ldm_ckpt_name', 'ddpm_ckpt.pth')
@@ -553,6 +565,8 @@ def train(
             optimizer.step()
 
         avg_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        if lr_scheduler is not None:
+            lr_scheduler.step(avg_loss)
         current_lr = optimizer.param_groups[0]['lr']
         logger.info(
             'Epoch %d/%d | Loss: %.4f | LR: %.6f',
@@ -587,7 +601,8 @@ if __name__ == '__main__':
     config_module = 'config.celebhq_params'
     output_root = 'runs'
     save_every_epochs = 5
-    resume_checkpoint = None
+    resume_checkpoint = r'runs/ddpm_20251019-143536/celebhq/ddpm_ckpt_text_image_cond_clip_latest.pth'
+    resume_checkpoint = r'runs/ddpm_20251019-215956/celebhq/checkpoints/epoch_005_ddpm_ckpt_text_image_cond_clip.pth'
     train_imgs = None  # e.g. 500 to debug with a subset
 
     train(
