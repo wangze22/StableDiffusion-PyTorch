@@ -600,9 +600,9 @@ def train(
 if __name__ == '__main__':
     config_module = 'config.celebhq_params'
     output_root = 'runs'
-    save_every_epochs = 5
+    save_every_epochs = 1
     resume_checkpoint = r'runs/ddpm_20251019-143536/celebhq/ddpm_ckpt_text_image_cond_clip_latest.pth'
-    resume_checkpoint = r'runs/ddpm_20251019-215956/celebhq/checkpoints/epoch_005_ddpm_ckpt_text_image_cond_clip.pth'
+    resume_checkpoint = r'runs/ddpm_20251020-140630/celebhq/checkpoints/epoch_010_ddpm_ckpt_text_image_cond_clip.pth'
     train_imgs = None  # e.g. 500 to debug with a subset
 
     train(

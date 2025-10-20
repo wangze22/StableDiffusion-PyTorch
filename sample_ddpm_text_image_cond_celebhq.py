@@ -7,9 +7,13 @@ from typing import Any, Dict, Optional, Sequence
 
 import numpy as np
 import torch
+import random
 import torchvision
-from PIL import Image
+import argparse
+import yaml
+import os
 from torchvision.utils import make_grid
+from PIL import Image
 from tqdm import tqdm
 from models.unet_cond_base import Unet
 from models.vqvae import VQVAE
@@ -17,6 +21,7 @@ from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 from transformers import DistilBertModel, DistilBertTokenizer, CLIPTokenizer, CLIPTextModel
 from utils.config_utils import *
 from utils.text_utils import *
+from dataset.celeb_dataset import CelebDataset
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -181,109 +186,78 @@ def _save_mask(mask_tensor: torch.Tensor, path: Path) -> None:
     mask_img.save(path)
 
 
-def sample(model,
-           scheduler,
-           train_config,
-           diffusion_model_config,
-           autoencoder_model_config,
-           diffusion_config,
-           dataset_config,
-           vae,
-           text_tokenizer,
-           text_model,
-           samples_dir: Path,
-           num_inference_steps: Optional[int] = None):
+def sample(
+        model, scheduler, train_config, diffusion_model_config,
+        autoencoder_model_config, diffusion_config, dataset_config, vae, text_tokenizer, text_model,
+        samples_dir: Path
+        ):
     r"""
     Sample stepwise by going backward one timestep at a time.
     We save the x0 predictions
     """
     im_size = dataset_config['im_size'] // 2 ** sum(autoencoder_model_config['down_sample'])
-    
+    samples_dir = Path(samples_dir)
+    samples_dir.mkdir(parents=True, exist_ok=True)
+
     ########### Sample random noise latent ##########
     # For not fixing generation with one sample
-    xt = torch.randn((1,
-                      autoencoder_model_config['z_channels'],
-                      im_size,
-                      im_size)).to(device)
+    xt = torch.randn(
+        (
+            1,
+            autoencoder_model_config['z_channels'],
+            im_size,
+            im_size
+            )
+        ).to(device)
     ###############################################
-    
+
     ############ Create Conditional input ###############
     text_prompt = ['She is a woman with blond hair. She is wearing lipstick.']
-    neg_prompts = ['He is a man.']
     empty_prompt = ['']
-    text_prompt_embed = get_text_representation(text_prompt,
-                                                text_tokenizer,
-                                                text_model,
-                                                device)
+    text_prompt_embed = get_text_representation(
+        text_prompt,
+        text_tokenizer,
+        text_model,
+        device
+        )
     # Can replace empty prompt with negative prompt
     empty_text_embed = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
     assert empty_text_embed.shape == text_prompt_embed.shape
-    
-    condition_config = get_config_value(diffusion_model_config, key='condition_config', default_value=None)
+
+    condition_config = get_config_value(diffusion_model_config, key = 'condition_config', default_value = None)
     validate_image_config(condition_config)
-    
+
     # This is required to get a random but valid mask
-    dataset_root = Path(dataset_config['im_path'])
-    mask_cfg = condition_config['image_condition_config']
-    mask = _load_random_mask(dataset_root,
-                             mask_cfg['image_condition_input_channels'],
-                             mask_cfg['image_condition_h'],
-                             mask_cfg['image_condition_w']).unsqueeze(0).to(device)
+    dataset = CelebDataset(
+        split = 'train',
+        im_path = dataset_config['im_path'],
+        im_size = dataset_config['im_size'],
+        im_channels = dataset_config['im_channels'],
+        use_latents = True,
+        latent_path = os.path.join(
+            train_config['task_name'],
+            train_config['vqvae_latent_dir_name']
+            ),
+        condition_config = condition_config
+        )
+    mask_idx = random.randint(0, len(dataset.masks))
+    mask = dataset.get_mask(mask_idx).unsqueeze(0).to(device)
     uncond_input = {
-        'text': empty_text_embed,
+        'text' : empty_text_embed,
         'image': torch.zeros_like(mask)
-    }
+        }
     cond_input = {
-        'text': text_prompt_embed,
+        'text' : text_prompt_embed,
         'image': mask
-    }
+        }
     ###############################################
-    
+
     # By default classifier free guidance is disabled
     # Change value in config or change default value here to enable it
     cf_guidance_scale = get_config_value(train_config, 'cf_guidance_scale', 1.0)
-    
+
     ################# Sampling Loop ########################
-    samples_dir.mkdir(parents=True, exist_ok=True)
-
-    # Persist mask and prompts for reproducibility
-    _save_mask(mask.squeeze(0).cpu(), samples_dir / 'mask.png')
-    metadata: Dict[str, Any] = {
-        'positive_prompts': text_prompt,
-        'negative_prompts': neg_prompts,
-        'num_inference_steps_requested': num_inference_steps,
-    }
-    (samples_dir / 'prompts.txt').write_text(
-        '\n'.join([
-            f'Positive: {text_prompt[0]}',
-            f'Negative: {neg_prompts[0]}',
-        ]),
-        encoding='utf-8',
-    )
-
-    total_timesteps = diffusion_config['num_timesteps']
-    if num_inference_steps is None or num_inference_steps >= total_timesteps:
-        timesteps_to_sample: Sequence[int] = list(range(total_timesteps))
-    else:
-        if num_inference_steps <= 0:
-            raise ValueError('num_inference_steps must be a positive integer.')
-        values = np.linspace(0, total_timesteps - 1, num=num_inference_steps)
-        timesteps_list = []
-        last_idx = -1
-        for val in values:
-            step_idx = int(np.floor(val + 1e-8))
-            if step_idx <= last_idx:
-                step_idx = last_idx + 1
-            step_idx = min(step_idx, total_timesteps - 1)
-            timesteps_list.append(step_idx)
-            last_idx = step_idx
-        timesteps_to_sample = timesteps_list
-
-    metadata['timesteps_desc'] = list(reversed(timesteps_to_sample))
-    metadata['num_inference_steps_effective'] = len(timesteps_to_sample)
-    (samples_dir / 'prompts.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False))
-
-    for i in tqdm(reversed(timesteps_to_sample), total=len(timesteps_to_sample)):
+    for i in tqdm(reversed(range(diffusion_config['num_timesteps']))):
         # Get prediction of noise
         t = (torch.ones((xt.shape[0],)) * i).long().to(device)
         noise_pred_cond = model(xt, t, cond_input)
@@ -303,15 +277,17 @@ def sample(model,
             ims = vae.decode(xt)
         else:
             ims = x0_pred
-        
+
         ims = torch.clamp(ims, -1., 1.).detach().cpu()
         ims = (ims + 1) / 2
-        grid = make_grid(ims, nrow=10)
+        grid = make_grid(ims, nrow = 10)
         img = torchvision.transforms.ToPILImage()(grid)
-        
-        img.save(str(samples_dir / f'x0_{i}.png'))
+
+        img_path = samples_dir / f'x0_{i}.png'
+        img.save(img_path)
         img.close()
     ##############################################################
+
 
 def infer(config_module: str,
           ldm_ckpt_path: Path,
@@ -387,8 +363,7 @@ def infer(config_module: str,
     with torch.no_grad():
         sample(model, scheduler, train_config, diffusion_model_config,
                autoencoder_model_config, diffusion_config, dataset_config, vae, text_tokenizer, text_model,
-               samples_dir=samples_dir,
-               num_inference_steps=num_inference_steps)
+               samples_dir=samples_dir)
 
 
 if __name__ == '__main__':
