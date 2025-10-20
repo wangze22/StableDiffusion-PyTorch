@@ -60,7 +60,7 @@ autoencoder_params = {
 train_params = {
     'seed': 1111,
     'task_name': 'celebhq',
-    'ldm_batch_size': 16,
+    'ldm_batch_size': 32,
     'ldm_epochs': 100,
     'num_samples': 1,
     'num_grid_rows': 1,

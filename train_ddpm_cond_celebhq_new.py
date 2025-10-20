@@ -8,7 +8,7 @@ import numpy as np
 import torch
 from dataset.celeb_dataset import CelebDataset
 from torch.optim import Adam
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 
 from models.unet_cond_base import Unet
@@ -25,11 +25,11 @@ from utils.train_utils import (
     persist_loss_history,
     plot_epoch_loss_curve,
     )
-
+os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def train():
+def train(num_images: int = None):
     diffusion_config = cfg.diffusion_params
     dataset_config = cfg.dataset_params
     diffusion_model_config = cfg.ldm_params
@@ -88,6 +88,9 @@ def train():
         latent_path = train_config['vqvae_latent_dir_name'],
         condition_config = condition_config,
         )
+    if num_images is not None:
+        max_samples = min(num_images, len(im_dataset))
+        im_dataset = Subset(im_dataset, range(max_samples))
 
     data_loader = DataLoader(
         im_dataset,
@@ -201,4 +204,5 @@ def train():
 
 
 if __name__ == '__main__':
-    train()
+    num_images = 30000
+    train(num_images = num_images)
