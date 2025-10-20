@@ -1,0 +1,90 @@
+c_factor = 4
+
+dataset_params = {
+    'im_path': 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ',
+    'im_channels': 3,
+    'im_size': 256,
+    'name': 'celebhq',
+}
+
+diffusion_params = {
+    'num_timesteps': 1000,
+    'beta_start': 0.00085,
+    'beta_end': 0.012,
+}
+
+ldm_params = {
+    'down_channels': [256 // c_factor, 384 // c_factor, 512 // c_factor, 768 // c_factor],
+    'mid_channels': [768// c_factor, 512// c_factor],
+    'down_sample': [True, True, True],
+    'attn_down': [True, True, True],
+    'time_emb_dim': 512,
+    'norm_channels': 32// c_factor,
+    'num_heads': 16,
+    'conv_out_channels': 128// c_factor,
+    'num_down_layers': 2,
+    'num_mid_layers': 2,
+    'num_up_layers': 2,
+    'condition_config': {
+        'condition_types': ['text', 'image'],
+        'text_condition_config': {
+            'text_embed_model': 'clip',
+            'train_text_embed_model': False,
+            'text_embed_dim': 512,
+            'cond_drop_prob': 0.1,
+        },
+        'image_condition_config': {
+            'image_condition_input_channels': 18,
+            'image_condition_output_channels': 3,
+            'image_condition_h': 512,
+            'image_condition_w': 512,
+            'cond_drop_prob': 0.1,
+        },
+    },
+}
+
+autoencoder_params = {
+    'z_channels': 4,
+    'codebook_size': 8192,
+    'down_channels': [64, 128, 256, 256],
+    'mid_channels': [256, 256],
+    'down_sample': [True, True, True],
+    'attn_down': [False, False, False],
+    'norm_channels': 32,
+    'num_heads': 4,
+    'num_down_layers': 2,
+    'num_mid_layers': 2,
+    'num_up_layers': 2,
+}
+
+train_params = {
+    'seed': 1111,
+    'task_name': 'celebhq',
+    'ldm_batch_size': 16,
+    'ldm_epochs': 100,
+    'num_samples': 1,
+    'num_grid_rows': 1,
+    'ldm_lr': 1e-4,
+    'save_latents': True,
+    'cf_guidance_scale': 1.0,
+    'vae_latent_dir_name': 'vae_latents',
+    'vqvae_latent_dir_name': 'vqvae_latents',
+}
+
+model_paths = {
+    'ldm_ckpt_name': 'ddpm_ckpt_text_image_cond_clip.pth',
+    'ldm_ckpt_resume': 'model_pths/ddpm_ckpt_text_image_cond_clip_latest.pth',
+    'vqvae_autoencoder_ckpt_name': 'vqvae_autoencoder_ckpt.pth',
+    'vae_autoencoder_ckpt_name': 'vae_autoencoder_ckpt.pth',
+    'vqvae_discriminator_ckpt_name': 'vqvae_discriminator_ckpt.pth',
+    'vae_discriminator_ckpt_name': 'vae_discriminator_ckpt.pth',
+}
+
+config = {
+    'dataset_params': dataset_params,
+    'diffusion_params': diffusion_params,
+    'ldm_params': ldm_params,
+    'autoencoder_params': autoencoder_params,
+    'train_params': train_params,
+    'model_paths': model_paths,
+}

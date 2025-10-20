@@ -6,17 +6,16 @@ from typing import Dict, List
 
 import numpy as np
 import torch
-import yaml
 from dataset.celeb_dataset import CelebDataset
 from torch.optim import Adam
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from models.unet_cond_base import Unet
-from models.vqvae import VQVAE
 
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
+from config import celebhq_text_image_cond as cfg
 from utils.config_utils import *
 from utils.diffusion_utils import *
 from utils.text_utils import *
@@ -25,30 +24,21 @@ from utils.train_utils import (
     ensure_directory,
     persist_loss_history,
     plot_epoch_loss_curve,
-)
+    )
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def train(config_path):
-    # Read the config file #
-    with open(config_path, 'r') as file:
-        try:
-            config = yaml.safe_load(file)
-        except yaml.YAMLError as exc:
-            print(exc)
-
-    ########################
-
-    diffusion_config = config['diffusion_params']
-    dataset_config = config['dataset_params']
-    diffusion_model_config = config['ldm_params']
-    autoencoder_model_config = config['autoencoder_params']
-    train_config = config['train_params']
-    model_pth_config = config['model_paths']
+def train():
+    diffusion_config = cfg.diffusion_params
+    dataset_config = cfg.dataset_params
+    diffusion_model_config = cfg.ldm_params
+    autoencoder_model_config = cfg.autoencoder_params
+    train_config = cfg.train_params
+    model_pth_config = cfg.model_paths
     run_artifacts = create_run_artifacts(train_config)
     logger: logging.Logger = run_artifacts['logger']
-    logger.info('Loaded config from %s', config_path)
+    logger.info('Loaded config from celebhq_text_image_cond module')
     logger.info('Run artifacts directory: %s', run_artifacts['run_dir'])
 
     save_every = max(1, int(train_config.get('ldm_save_every_epochs', 1)))
@@ -95,10 +85,7 @@ def train(config_path):
         im_size = dataset_config['im_size'],
         im_channels = dataset_config['im_channels'],
         use_latents = True,
-        latent_path = os.path.join(
-            train_config['task_name'],
-            train_config['vqvae_latent_dir_name'],
-            ),
+        latent_path = train_config['vqvae_latent_dir_name'],
         condition_config = condition_config,
         )
 
@@ -119,45 +106,11 @@ def train(config_path):
         logger.info(f'Loaded ldm model {resume_path}')
     model.train()
 
-    vae = None
-    # Load VAE ONLY if latents are not to be saved or some are missing
-    if not im_dataset.use_latents:
-        logger.info('Loading vqvae model as latents not present')
-        vae = VQVAE(
-            im_channels = dataset_config['im_channels'],
-            model_config = autoencoder_model_config,
-            ).to(device)
-        vae.eval()
-        # Load vae if found
-        if os.path.exists(
-                os.path.join(
-                    train_config['task_name'],
-                    model_pth_config['vqvae_autoencoder_ckpt_name'],
-                    ),
-                ):
-            logger.info('Loaded vae checkpoint')
-            vae.load_state_dict(
-                torch.load(
-                    os.path.join(
-                        train_config['task_name'],
-                        model_pth_config['vqvae_autoencoder_ckpt_name'],
-                        ),
-                    map_location = device,
-                    ),
-                )
-        else:
-            raise Exception('VAE checkpoint not found and use_latents was disabled')
-
     # Specify training parameters
     num_epochs = train_config['ldm_epochs']
     optimizer = Adam(model.parameters(), lr = train_config['ldm_lr'])
     criterion = torch.nn.MSELoss()
 
-    # Load vae and freeze parameters ONLY if latents already not saved
-    if not im_dataset.use_latents:
-        assert vae is not None
-        for param in vae.parameters():
-            param.requires_grad = False
 
     # Run training
     for epoch_idx in range(num_epochs):
@@ -170,9 +123,6 @@ def train(config_path):
                 im = data
             optimizer.zero_grad()
             im = im.float().to(device)
-            if not im_dataset.use_latents:
-                with torch.no_grad():
-                    im, _ = vae.encode(im)
 
             ########### Handling Conditional Input ###########
             if 'text' in condition_types:
@@ -251,5 +201,4 @@ def train(config_path):
 
 
 if __name__ == '__main__':
-    config_path = 'config/celebhq_text_image_cond.yaml'
-    train(config_path)
+    train()
