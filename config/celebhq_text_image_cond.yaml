@@ -62,6 +62,8 @@ train_params:
   cf_guidance_scale : 1.0
   vae_latent_dir_name: 'vae_latents'
   vqvae_latent_dir_name: 'vqvae_latents'
+
+model_paths:
   ldm_ckpt_name: 'ddpm_ckpt_text_image_cond_clip.pth'
   vqvae_autoencoder_ckpt_name: 'vqvae_autoencoder_ckpt.pth'
   vae_autoencoder_ckpt_name: 'vae_autoencoder_ckpt.pth'

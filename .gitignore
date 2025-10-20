@@ -1,6 +1,7 @@
 *
 !*/
 !*.py
+!*.yaml
 !.gitignore
 !README.md
 !requirements.txt
