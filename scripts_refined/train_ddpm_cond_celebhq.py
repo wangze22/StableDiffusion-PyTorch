@@ -1,31 +1,43 @@
-import yaml
 import argparse
+import logging
+import os
+from pathlib import Path
+from typing import Dict, List
+
 import numpy as np
-from tqdm import tqdm
-from torch.optim import Adam
+import torch
+import yaml
 from dataset.celeb_dataset import CelebDataset
+from torch.optim import Adam
 from torch.utils.data import DataLoader
+from tqdm import tqdm
 
 from models.unet_cond_base import Unet
 from models.vqvae import VQVAE
 
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
-from utils.text_utils import *
 from utils.config_utils import *
 from utils.diffusion_utils import *
+from utils.text_utils import *
+from utils.train_utils import (
+    create_run_artifacts,
+    ensure_directory,
+    persist_loss_history,
+    plot_epoch_loss_curve,
+)
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 
-def train(args):
+def train(config_path):
     # Read the config file #
-    with open(args.config_path, 'r') as file:
+    with open(config_path, 'r') as file:
         try:
             config = yaml.safe_load(file)
         except yaml.YAMLError as exc:
             print(exc)
-    print(config)
+
     ########################
 
     diffusion_config = config['diffusion_params']
@@ -33,6 +45,16 @@ def train(args):
     diffusion_model_config = config['ldm_params']
     autoencoder_model_config = config['autoencoder_params']
     train_config = config['train_params']
+    model_pth_config = config['model_paths']
+    run_artifacts = create_run_artifacts(train_config)
+    logger: logging.Logger = run_artifacts['logger']
+    logger.info('Loaded config from %s', config_path)
+    logger.info('Run artifacts directory: %s', run_artifacts['run_dir'])
+
+    save_every = max(1, int(train_config.get('ldm_save_every_epochs', 1)))
+    loss_history: List[Dict[str, float]] = []
+    legacy_ckpt_dir = Path(train_config['task_name'])
+    ensure_directory(legacy_ckpt_dir)
 
     ########## Create the noise scheduler #############
     scheduler = LinearNoiseScheduler(
@@ -75,7 +97,7 @@ def train(args):
         use_latents = True,
         latent_path = os.path.join(
             train_config['task_name'],
-            train_config['vqvae_latent_dir_name'],
+            model_pth_config['vqvae_latent_dir_name'],
             ),
         condition_config = condition_config,
         )
@@ -96,7 +118,7 @@ def train(args):
     vae = None
     # Load VAE ONLY if latents are not to be saved or some are missing
     if not im_dataset.use_latents:
-        print('Loading vqvae model as latents not present')
+        logger.info('Loading vqvae model as latents not present')
         vae = VQVAE(
             im_channels = dataset_config['im_channels'],
             model_config = autoencoder_model_config,
@@ -106,15 +128,15 @@ def train(args):
         if os.path.exists(
                 os.path.join(
                     train_config['task_name'],
-                    train_config['vqvae_autoencoder_ckpt_name'],
+                    model_pth_config['vqvae_autoencoder_ckpt_name'],
                     ),
                 ):
-            print('Loaded vae checkpoint')
+            logger.info('Loaded vae checkpoint')
             vae.load_state_dict(
                 torch.load(
                     os.path.join(
                         train_config['task_name'],
-                        train_config['vqvae_autoencoder_ckpt_name'],
+                        model_pth_config['vqvae_autoencoder_ckpt_name'],
                         ),
                     map_location = device,
                     ),
@@ -135,8 +157,8 @@ def train(args):
 
     # Run training
     for epoch_idx in range(num_epochs):
-        losses = []
-        for data in tqdm(data_loader):
+        epoch_losses: List[float] = []
+        for data in tqdm(data_loader, desc = f'Epoch {epoch_idx + 1}/{num_epochs}', leave = False):
             cond_input = None
             if condition_config is not None:
                 im, cond_input = data
@@ -188,30 +210,42 @@ def train(args):
             noisy_im = scheduler.add_noise(im, noise, t)
             noise_pred = model(noisy_im, t, cond_input = cond_input)
             loss = criterion(noise_pred, noise)
-            losses.append(loss.item())
+            epoch_losses.append(loss.item())
             loss.backward()
             optimizer.step()
-        print(
-            'Finished epoch:{} | Loss : {:.4f}'.format(
-                epoch_idx + 1,
-                np.mean(losses),
-                ),
-            )
-        torch.save(
-            model.state_dict(), os.path.join(
-                train_config['task_name'],
-                train_config['ldm_ckpt_name'],
-                ),
+
+        avg_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
+        logger.info(
+            'Epoch %d/%d | Loss: %.4f',
+            epoch_idx + 1,
+            num_epochs,
+            avg_loss,
             )
 
+        loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
+        persist_loss_history(loss_history, run_artifacts['logs_dir'])
+        plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
+
+        should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == num_epochs)
+        if should_save:
+            state_dict = model.state_dict()
+            checkpoints_dir = run_artifacts['checkpoints_dir']
+            latest_ckpt_path = checkpoints_dir / model_pth_config['ldm_ckpt_name']
+            epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{model_pth_config["ldm_ckpt_name"]}'
+            torch.save(state_dict, latest_ckpt_path)
+            torch.save(state_dict, epoch_ckpt_path)
+            legacy_ckpt_path = legacy_ckpt_dir / model_pth_config['ldm_ckpt_name']
+            torch.save(state_dict, legacy_ckpt_path)
+            logger.info(
+                'Saved checkpoints: latest=%s | epoch=%s',
+                latest_ckpt_path,
+                epoch_ckpt_path,
+                )
+
+    logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
     print('Done Training ...')
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description = 'Arguments for ddpm training')
-    parser.add_argument(
-        '--config', dest = 'config_path',
-        default = '../config/celebhq_text_cond_clip.yaml', type = str,
-        )
-    args = parser.parse_args()
-    train(args)
+    config_path = '../config/celebhq_text_cond_clip.yaml'
+    train(config_path)
