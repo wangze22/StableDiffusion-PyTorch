@@ -97,7 +97,7 @@ def train(config_path):
         use_latents = True,
         latent_path = os.path.join(
             train_config['task_name'],
-            model_pth_config['vqvae_latent_dir_name'],
+            train_config['vqvae_latent_dir_name'],
             ),
         condition_config = condition_config,
         )
@@ -113,6 +113,10 @@ def train(config_path):
         im_channels = autoencoder_model_config['z_channels'],
         model_config = diffusion_model_config,
         ).to(device)
+    resume_path = model_pth_config['ldm_ckpt_resume']
+    if resume_path is not None:
+        model.load_state_dict(torch.load(str(resume_path), map_location = device))
+        logger.info(f'Loaded ldm model {resume_path}')
     model.train()
 
     vae = None
@@ -247,5 +251,5 @@ def train(config_path):
 
 
 if __name__ == '__main__':
-    config_path = '../config/celebhq_text_cond_clip.yaml'
+    config_path = 'config/celebhq_text_image_cond.yaml'
     train(config_path)

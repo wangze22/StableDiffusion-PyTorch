@@ -1,5 +1,5 @@
 dataset_params:
-  im_path: r'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
+  im_path: 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
   im_channels : 3
   im_size : 256
   name: 'celebhq'
@@ -65,6 +65,7 @@ train_params:
 
 model_paths:
   ldm_ckpt_name: 'ddpm_ckpt_text_image_cond_clip.pth'
+  ldm_ckpt_resume: 'model_pths/ddpm_ckpt_text_image_cond_clip_latest.pth'
   vqvae_autoencoder_ckpt_name: 'vqvae_autoencoder_ckpt.pth'
   vae_autoencoder_ckpt_name: 'vae_autoencoder_ckpt.pth'
   vqvae_discriminator_ckpt_name: 'vqvae_discriminator_ckpt.pth'
