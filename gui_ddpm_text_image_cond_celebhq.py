@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+import random
 from PIL import Image, ImageTk
 import tkinter as tk
 from tkinter import messagebox
@@ -444,15 +445,33 @@ class MaskPainterGUI:
         self.load_random_mask()
 
     def build_palette_buttons(self):
-        # Create a grid of palette buttons
+        # Background (class 0) button as an 'eraser'
+        top_row = tk.Frame(self.palette_frame)
+        top_row.pack(side=tk.TOP, anchor='w')
+        r, g, b = palette[0]
+        bg_hex = '#%02x%02x%02x' % (r, g, b)
+        luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        fg_color_bg = 'white' if luminance < 128 else 'black'
+        tk.Button(top_row, text='background', bg=bg_hex, fg=fg_color_bg, command=lambda: self.set_brush_class(0)).pack(side=tk.LEFT, padx=2, pady=2)
+
+        # Create a grid of palette buttons for semantic labels (1..18)
+        grid = tk.Frame(self.palette_frame)
+        grid.pack(side=tk.TOP, anchor='w')
         for i, lbl in enumerate(label_list):
-            color = '#%02x%02x%02x' % palette[i + 1]
-            btn = tk.Button(self.palette_frame, text=lbl, bg=color, command=lambda idx=i+1: self.set_brush_class(idx))
+            r, g, b = palette[i + 1]
+            color_hex = '#%02x%02x%02x' % (r, g, b)
+            # Choose white text for dark backgrounds to avoid unreadable labels (e.g., hair=black)
+            luminance = 0.299 * r + 0.587 * g + 0.114 * b
+            fg_color = 'white' if luminance < 128 else 'black'
+            btn = tk.Button(grid, text=lbl, bg=color_hex, fg=fg_color, command=lambda idx=i+1: self.set_brush_class(idx))
             btn.grid(row=i // 6, column=i % 6, padx=2, pady=2, sticky='nsew')
 
     def set_brush_class(self, class_id: int):
         self.current_class_id = class_id
-        self.status_var.set(f'Brush: {label_list[class_id-1]}')
+        if class_id == 0:
+            self.status_var.set('Brush: background')
+        else:
+            self.status_var.set(f'Brush: {label_list[class_id-1]}')
 
     def on_paint(self, event):
         x, y = int(event.x), int(event.y)
@@ -470,6 +489,15 @@ class MaskPainterGUI:
         self.mask_img = class_map_to_rgb(self.class_map)
         self.mask_tk = ImageTk.PhotoImage(self.mask_img)
         self.canvas.itemconfig(self.canvas_img, image=self.mask_tk)
+
+    def _set_right_panel_image(self, pil_img: Image.Image):
+        """Resize and display a PIL image on the right panel to match mask size."""
+        try:
+            display_img = pil_img.resize((self.w, self.h), Image.BICUBIC)
+        except Exception:
+            display_img = pil_img
+        self.generated_tk = ImageTk.PhotoImage(display_img)
+        self.image_panel.config(image=self.generated_tk)
 
     def clear_mask(self):
         self.class_map[:, :] = 0
@@ -507,6 +535,25 @@ class MaskPainterGUI:
             self.class_map = class_map.astype(np.int32)
             self.refresh_mask_image()
             self.status_var.set(f'Loaded random mask #{mask_idx}')
+
+            # Also set the prompt to a caption corresponding to this image (if available)
+            try:
+                if hasattr(dataset, 'texts') and dataset.texts and len(dataset.texts) > mask_idx:
+                    captions = dataset.texts[mask_idx]
+                    if isinstance(captions, list) and len(captions) > 0:
+                        self.prompt_var.set(random.choice(captions))
+            except Exception:
+                pass
+
+            # Also load and show the corresponding original image on the right as reference
+            try:
+                ref_img_path = dataset.images[mask_idx]
+                ref_img = Image.open(ref_img_path).convert('RGB')
+                self.generated_img = ref_img
+                self._set_right_panel_image(self.generated_img)
+                ref_img.close()
+            except Exception:
+                pass
         except Exception as e:
             messagebox.showerror('Error', f'Failed to load random mask: {e}')
 
@@ -537,8 +584,7 @@ class MaskPainterGUI:
                     prompt_text=prompt_text or '',
                 )
                 self.generated_img = img
-                self.generated_tk = ImageTk.PhotoImage(self.generated_img)
-                self.image_panel.after(0, lambda: self.image_panel.config(image=self.generated_tk))
+                self.image_panel.after(0, lambda: self._set_right_panel_image(self.generated_img))
                 self.status_var.set('Done')
             except Exception as e:
                 self.status_var.set('Failed')
@@ -554,9 +600,12 @@ class MaskPainterGUI:
 
 def main():
     parser = argparse.ArgumentParser(description='GUI for text+mask-conditional DDPM sampling on CelebHQ')
-    parser.add_argument('--config', type=str, default='config.celebhq_text_image_cond', help='Config module path')
-    parser.add_argument('--ldm_ckpt', type=str, default='runs/ddpm_20251019-215956/celebhq/checkpoints/epoch_005_ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
-    parser.add_argument('--vqvae_ckpt', type=str, default='runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth', help='Path to VQVAE checkpoint')
+    parser.add_argument('--config', type=str,
+                        default='config.celebhq_text_image_cond', help='Config module path')
+    parser.add_argument('--ldm_ckpt', type=str,
+                        default='runs/ddpm_20251021-011756/celebhq/ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
+    parser.add_argument('--vqvae_ckpt', type=str,
+                        default='runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth', help='Path to VQVAE checkpoint')
     args = parser.parse_args()
 
     try:
