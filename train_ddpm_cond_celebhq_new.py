@@ -120,7 +120,8 @@ def train(num_images: int = None):
     # Run training
     for epoch_idx in range(num_epochs):
         epoch_losses: List[float] = []
-        for data in tqdm(data_loader, desc = f'Epoch {epoch_idx + 1}/{num_epochs}', leave = False):
+        progress_bar = tqdm(data_loader, desc = f'Epoch {epoch_idx + 1}/{num_epochs}', leave = False)
+        for data in progress_bar:
             cond_input = None
             if cfg.condition_config is not None:
                 im, cond_input = data
@@ -158,12 +159,12 @@ def train(num_images: int = None):
 
             # Sample timestep
             t = torch.randint(0, cfg.diffusion_num_timesteps, (im.shape[0],)).to(device)
-
             # Add noise to images according to timestep
             noisy_im = scheduler.add_noise(im, noise, t)
             noise_pred = model(noisy_im, t, cond_input = cond_input)
             loss = criterion(noise_pred, noise)
             epoch_losses.append(loss.item())
+            progress_bar.set_postfix(loss = f'{loss.item():.4f}')
             loss.backward()
             optimizer.step()
 

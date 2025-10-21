@@ -400,6 +400,10 @@ class MaskPainterGUI:
         # Painting state
         self.last_paint_pos: Optional[Tuple[int, int]] = None
         self._refresh_scheduled: bool = False
+        # Undo/Redo state
+        self.undo_stack: List[np.ndarray] = []
+        self.redo_stack: List[np.ndarray] = []
+        self.history_limit: int = 50
 
         # Mask state as class map (0..num_classes)
         self.class_map = np.zeros((self.h, self.w), dtype=np.int32)
@@ -419,46 +423,63 @@ class MaskPainterGUI:
         self.right_frame = tk.Frame(self.root_frame)
         self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
 
-        # Top-left: prompt
-        self.prompt_var = tk.StringVar()
-        self.prompt_entry = tk.Entry(self.left_frame, textvariable=self.prompt_var, width=60)
-        self.prompt_entry.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
-
+        # Top-left row: action buttons
         btns_frame = tk.Frame(self.left_frame)
-        btns_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=0)
-
+        btns_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
         self.btn_random_prompt = tk.Button(btns_frame, text='Random Prompt', command=self.load_random_prompt)
         self.btn_random_prompt.pack(side=tk.LEFT, padx=2)
         self.btn_random_mask = tk.Button(btns_frame, text='Random Mask', command=self.load_random_mask)
         self.btn_random_mask.pack(side=tk.LEFT, padx=2)
         self.btn_clear_mask = tk.Button(btns_frame, text='Clear Mask', command=self.clear_mask)
         self.btn_clear_mask.pack(side=tk.LEFT, padx=2)
+        self.btn_refresh_mask = tk.Button(btns_frame, text='Refresh Mask', command=self.refresh_current_mask)
+        self.btn_refresh_mask.pack(side=tk.LEFT, padx=2)
 
-        # Brush size info
+        # Second row: prompt input
+        self.prompt_var = tk.StringVar()
+        self.prompt_entry = tk.Entry(self.left_frame, textvariable=self.prompt_var, width=60)
+        self.prompt_entry.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+
+        # Prepare variables for brush preview and label (preview will be created next to palette in the fourth row)
         self.brush_info_var = tk.StringVar()
-        self.brush_info_label = tk.Label(self.left_frame, textvariable=self.brush_info_var)
-        self.brush_info_label.pack(side=tk.TOP, anchor='nw', padx=6, pady=2)
+        self.brush_preview_size = 125  # Enlarged to 2.5x of previous 50px
+        self.brush_preview = None  # will be created in build_palette_buttons
+        self.brush_label_var = tk.StringVar()
         self.update_brush_info_label()
 
-        # Canvas for mask
-        self.canvas = tk.Canvas(self.left_frame, width=self.w, height=self.h, bg='black')
-        self.canvas.pack(side=tk.TOP, padx=6, pady=6)
+        # Row to horizontally align mask canvas (left) and generated image (right)
+        self.row_align = tk.Frame(self.root_frame)
+        self.row_align.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+        self.canvas_holder = tk.Frame(self.row_align)
+        self.canvas_holder.pack(side=tk.LEFT, anchor='nw')
+        self.image_holder = tk.Frame(self.row_align)
+        self.image_holder.pack(side=tk.LEFT, anchor='nw', padx=6)
+
+        # Canvas for mask (placed inside the left holder)
+        self.canvas = tk.Canvas(self.canvas_holder, width=self.w, height=self.h, bg='black')
+        self.canvas.pack(side=tk.TOP)
         self.canvas_img = self.canvas.create_image(0, 0, anchor='nw', image=self.mask_tk)
 
         # Mouse bindings
         self.canvas.bind('<Button-1>', self.on_button_press)
         self.canvas.bind('<B1-Motion>', self.on_paint)
         self.canvas.bind('<ButtonRelease-1>', self.on_button_release)
+        # Right-click to pick color from the mask
+        self.canvas.bind('<Button-3>', self.on_pick_color)
         # Mouse wheel for brush size (Windows/Mac)
         self.canvas.bind('<MouseWheel>', self.on_mouse_wheel)
         # Mouse wheel for many Linux setups
         self.canvas.bind('<Button-4>', self.on_mouse_wheel_linux_up)
         self.canvas.bind('<Button-5>', self.on_mouse_wheel_linux_down)
+        # Undo/Redo shortcuts
+        self.master.bind('<Control-z>', self.on_undo)
+        self.master.bind('<Control-y>', self.on_redo)
 
-        # Bottom-left: palette
-        self.palette_frame = tk.Frame(self.left_frame)
-        self.palette_frame.pack(side=tk.BOTTOM, anchor='sw', padx=6, pady=6)
+        # Palette and brush preview placed under the mask canvas
+        self.palette_frame = tk.Frame(self.canvas_holder)
+        self.palette_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
         self.build_palette_buttons()
+
 
         # Right panel: generated image and controls
         self.generate_btn = tk.Button(self.right_frame, text='Generate', command=self.on_generate, width=20, height=2)
@@ -469,33 +490,56 @@ class MaskPainterGUI:
         self.status_label = tk.Label(self.right_frame, textvariable=self.status_var)
         self.status_label.pack(side=tk.TOP, pady=2)
 
-        self.image_panel = tk.Label(self.right_frame)
-        self.image_panel.pack(side=tk.TOP, padx=6, pady=6)
+        self.image_panel = tk.Label(self.image_holder)
+        self.image_panel.pack(side=tk.TOP)
 
         # Initialize with a random mask; prompt will match the same image
         self.load_random_mask()
 
     def build_palette_buttons(self):
+        # Container that holds brush preview (left) and palette buttons (right)
+        container = tk.Frame(self.palette_frame)
+        container.pack(side=tk.TOP, anchor='w')
+
+        # Left: Brush size visual preview and current label
+        preview_col = tk.Frame(container)
+        preview_col.pack(side=tk.LEFT, anchor='nw', padx=2)
+        self.brush_preview = tk.Canvas(preview_col, width=self.brush_preview_size, height=self.brush_preview_size,
+                                       bg='#f0f0f0', highlightthickness=1, highlightbackground='#cccccc')
+        self.brush_preview.pack(side=tk.TOP, anchor='nw')
+        # Label showing current brush label next to preview
+        self.brush_label = tk.Label(preview_col, textvariable=self.brush_label_var)
+        self.brush_label.pack(side=tk.TOP, anchor='nw', pady=4)
+        # Brush size textual info placed with preview (fourth row)
+        self.brush_info_label = tk.Label(preview_col, textvariable=self.brush_info_var)
+        self.brush_info_label.pack(side=tk.TOP, anchor='nw', pady=2)
+
+        # Right: palette buttons
+        buttons_col = tk.Frame(container)
+        buttons_col.pack(side=tk.LEFT, anchor='nw', padx=8)
+
         # Background (class 0) button as an 'eraser'
-        top_row = tk.Frame(self.palette_frame)
-        top_row.pack(side=tk.TOP, anchor='w')
         r, g, b = palette[0]
         bg_hex = '#%02x%02x%02x' % (r, g, b)
         luminance = 0.299 * r + 0.587 * g + 0.114 * b
         fg_color_bg = 'white' if luminance < 128 else 'black'
-        tk.Button(top_row, text='background', bg=bg_hex, fg=fg_color_bg, command=lambda: self.set_brush_class(0)).pack(side=tk.LEFT, padx=2, pady=2)
+        tk.Button(buttons_col, text='background', bg=bg_hex, fg=fg_color_bg, command=lambda: self.set_brush_class(0)).pack(side=tk.TOP, anchor='w', padx=2, pady=2)
 
         # Create a grid of palette buttons for semantic labels (1..18)
-        grid = tk.Frame(self.palette_frame)
+        grid = tk.Frame(buttons_col)
         grid.pack(side=tk.TOP, anchor='w')
         for i, lbl in enumerate(label_list):
             r, g, b = palette[i + 1]
             color_hex = '#%02x%02x%02x' % (r, g, b)
-            # Choose white text for dark backgrounds to avoid unreadable labels (e.g., hair=black)
+            # Choose white text for dark backgrounds to avoid unreadable labels (e.g., hair)
             luminance = 0.299 * r + 0.587 * g + 0.114 * b
             fg_color = 'white' if luminance < 128 else 'black'
             btn = tk.Button(grid, text=lbl, bg=color_hex, fg=fg_color, command=lambda idx=i+1: self.set_brush_class(idx))
             btn.grid(row=i // 6, column=i % 6, padx=2, pady=2, sticky='nsew')
+
+        # Initialize preview and label now that preview widget exists
+        self.update_brush_info_label()
+        self.update_brush_preview()
 
     def set_brush_class(self, class_id: int):
         self.current_class_id = class_id
@@ -504,6 +548,7 @@ class MaskPainterGUI:
         else:
             self.status_var.set(f'Brush: {label_list[class_id-1]}')
         self.update_brush_info_label()
+        self.update_brush_preview()
 
     def on_paint(self, event):
         x, y = int(event.x), int(event.y)
@@ -558,6 +603,8 @@ class MaskPainterGUI:
         self.refresh_mask_image()
 
     def on_button_press(self, event):
+        # Save state before starting a new stroke for proper Undo
+        self.push_history()
         self.last_paint_pos = (int(event.x), int(event.y))
         self._paint_circle_at(self.last_paint_pos[0], self.last_paint_pos[1])
         self._schedule_refresh()
@@ -573,6 +620,63 @@ class MaskPainterGUI:
         else:
             cls_name = label_list[self.current_class_id - 1]
         self.brush_info_var.set(f'Brush: {cls_name} | size: {self.brush_radius}px')
+        # Sync the preview label with current brush label
+        try:
+            self.brush_label_var.set(f'Current: {cls_name}')
+        except Exception:
+            pass
+
+    def update_brush_preview(self):
+        # Clear preview
+        self.brush_preview.delete('all')
+        W = H = self.brush_preview_size
+        cx, cy = W // 2, H // 2
+        r = int(self.brush_radius)
+        # Keep circle within canvas
+        r = max(1, min(r, min(cx, cy) - 4))
+        # Background
+        self.brush_preview.create_rectangle(0, 0, W, H, fill='#f0f0f0', outline='')
+        # Circle color uses current class palette color for better intuition
+        color_idx = max(0, min(self.current_class_id, len(palette) - 1))
+        r_col, g_col, b_col = palette[color_idx]
+        fill_hex = '#%02x%02x%02x' % (r_col, g_col, b_col)
+        # For dark fill choose white text
+        luminance = 0.299 * r_col + 0.587 * g_col + 0.114 * b_col
+        text_fg = 'white' if luminance < 128 else 'black'
+        # Draw circle representing brush size (diameter = 2r)
+        self.brush_preview.create_oval(cx - r, cy - r, cx + r, cy + r, fill=fill_hex, outline='black')
+        # Add size text at the center (no crosshair)
+        self.brush_preview.create_text(cx, cy, text=f'{self.brush_radius}px', fill=text_fg, font=('Arial', 10, 'bold'))
+
+    def push_history(self):
+        # Push a snapshot of current class_map to undo stack
+        if len(self.undo_stack) >= self.history_limit:
+            self.undo_stack.pop(0)
+        self.undo_stack.append(self.class_map.copy())
+        # New action invalidates redo stack
+        self.redo_stack.clear()
+
+    def on_undo(self, event=None):
+        if not self.undo_stack:
+            self.status_var.set('Nothing to undo')
+            return 'break'
+        # Move current state to redo and restore last undo
+        self.redo_stack.append(self.class_map.copy())
+        self.class_map = self.undo_stack.pop()
+        self.refresh_mask_image()
+        self.status_var.set('Undo')
+        return 'break'
+
+    def on_redo(self, event=None):
+        if not self.redo_stack:
+            self.status_var.set('Nothing to redo')
+            return 'break'
+        # Move current to undo and restore from redo stack
+        self.undo_stack.append(self.class_map.copy())
+        self.class_map = self.redo_stack.pop()
+        self.refresh_mask_image()
+        self.status_var.set('Redo')
+        return 'break'
 
     def on_mouse_wheel(self, event):
         # Windows/Mac: event.delta is positive when scrolled up
@@ -590,6 +694,23 @@ class MaskPainterGUI:
         self.brush_radius = int(np.clip(self.brush_radius + delta, 1, 128))
         if self.brush_radius != old:
             self.update_brush_info_label()
+            self.update_brush_preview()
+
+    def on_pick_color(self, event):
+        """Right-click pick color (class id) from the mask at cursor position."""
+        x, y = int(event.x), int(event.y)
+        if x < 0 or y < 0 or x >= self.w or y >= self.h:
+            return
+        try:
+            picked_class = int(self.class_map[y, x])
+            self.set_brush_class(picked_class)
+            # Status message
+            if picked_class == 0:
+                self.status_var.set('Picked color: background')
+            else:
+                self.status_var.set(f'Picked color: {label_list[picked_class - 1]}')
+        except Exception:
+            pass
 
     def _set_right_panel_image(self, pil_img: Image.Image):
         """Resize and display a PIL image on the right panel to match mask size."""
@@ -601,6 +722,8 @@ class MaskPainterGUI:
         self.image_panel.config(image=self.generated_tk)
 
     def clear_mask(self):
+        # Push current state to undo before clearing
+        self.push_history()
         self.class_map[:, :] = 0
         self.refresh_mask_image()
 
@@ -656,7 +779,12 @@ class MaskPainterGUI:
                 class_map = np.array(Image.fromarray(class_map.astype(np.uint8), mode='L').resize((self.w, self.h), Image.NEAREST), dtype=np.int32)
             self.class_map = class_map.astype(np.int32)
             self.refresh_mask_image()
+            # Reset history for new mask session and push initial state
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self.push_history()
             self.status_var.set(f'Loaded random mask #{mask_idx}')
+            self.update_brush_preview()
 
             # Also set the prompt to a caption corresponding to this image (if available)
             try:
@@ -678,6 +806,32 @@ class MaskPainterGUI:
                 pass
         except Exception as e:
             messagebox.showerror('Error', f'Failed to load random mask: {e}')
+
+    def refresh_current_mask(self):
+        """Reload the original mask for the current image index, discarding edits.
+        Keeps the prompt and right-side reference image unchanged.
+        """
+        if self.dataset is None or self.current_index is None:
+            self.status_var.set('No mask to refresh')
+            return
+        try:
+            mask = self.dataset.get_mask(self.current_index)
+            class_map = class_map_from_one_hot(mask)
+            if class_map.shape != (self.h, self.w):
+                class_map = np.array(
+                    Image.fromarray(class_map.astype(np.uint8), mode='L').resize((self.w, self.h), Image.NEAREST),
+                    dtype=np.int32,
+                )
+            self.class_map = class_map.astype(np.int32)
+            self.refresh_mask_image()
+            # Reset history for refreshed mask and push initial state
+            self.undo_stack.clear()
+            self.redo_stack.clear()
+            self.push_history()
+            self.update_brush_preview()
+            self.status_var.set(f'Refreshed mask for index #{self.current_index}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to refresh mask: {e}')
 
     def on_generate(self):
         if self.is_generating:

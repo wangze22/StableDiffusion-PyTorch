@@ -254,7 +254,7 @@ def sample(
 
     # By default classifier free guidance is disabled
     # Change value in config or change default value here to enable it
-    cf_guidance_scale = get_config_value(train_config, 'cf_guidance_scale', 1.0)
+    cf_guidance_scale = get_config_value(train_config, 'cf_guidance_scale', 0.8)
 
     ################# Sampling Loop ########################
     for i in tqdm(reversed(range(diffusion_config['num_timesteps']))):
@@ -370,7 +370,7 @@ if __name__ == '__main__':
     config_module = 'config.celebhq_params'
     vqvae_ckpt_path = Path('runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth')
     ldm_ckpt_path = Path('runs/ddpm_20251019-041414/celebhq/ddpm_ckpt_text_image_cond_clip_latest.pth')
-    ldm_ckpt_path = Path('runs/ddpm_20251019-215956/celebhq/checkpoints/epoch_005_ddpm_ckpt_text_image_cond_clip.pth')
+    ldm_ckpt_path = Path('runs/ddpm_20251021-190501/celebhq/ddpm_ckpt_text_image_cond_clip.pth')
     samples_root = ldm_ckpt_path.parent / 'cond_text_image_samples'
     samples_dir = samples_root / datetime.now().strftime('%Y%m%d-%H%M%S')
     num_inference_steps = 1000  # Adjust this value to control sampling steps (<= config diffusion steps)
