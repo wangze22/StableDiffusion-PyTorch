@@ -198,7 +198,7 @@ palette: List[Tuple[int, int, int]] = [
     (255, 0, 0),      # mouth
     (255, 140, 0),    # u_lip
     (178, 34, 34),    # l_lip
-    (0, 0, 0),        # hair (rendered near-black)
+    (50, 50, 50),     # hair (dark gray) — distinguishable from background
     (128, 0, 128),    # hat
     (255, 0, 255),    # ear_r (ear ring)
     (173, 216, 230),  # neck_l
@@ -372,6 +372,23 @@ class MaskPainterGUI:
         self.autoencoder_config = bundle.configs['autoencoder_params']
         self.train_config = bundle.configs['train_params']
 
+        # Initialize dataset once for caption alignment and efficiency
+        try:
+            self.dataset = CelebDataset(
+                split='train',
+                im_path=self.dataset_config['im_path'],
+                im_size=self.dataset_config['im_size'],
+                im_channels=self.dataset_config['im_channels'],
+                use_latents=True,
+                latent_path=str(Path(self.train_config['task_name']) / self.train_config['vqvae_latent_dir_name']),
+                condition_config=self.ldm_config['condition_config'],
+            )
+        except Exception:
+            self.dataset = None
+
+        # Track the currently loaded sample index (for Random Prompt)
+        self.current_index: Optional[int] = None
+
         self.num_classes = len(label_list)
         self.h = get_config_value(self.ldm_config['condition_config']['image_condition_config'], 'image_condition_h', self.dataset_config['im_size'])
         self.w = get_config_value(self.ldm_config['condition_config']['image_condition_config'], 'image_condition_w', self.dataset_config['im_size'])
@@ -380,6 +397,9 @@ class MaskPainterGUI:
         self.current_class_id = 1  # default to 'skin'
         self.brush_radius = 6
         self.is_generating = False
+        # Painting state
+        self.last_paint_pos: Optional[Tuple[int, int]] = None
+        self._refresh_scheduled: bool = False
 
         # Mask state as class map (0..num_classes)
         self.class_map = np.zeros((self.h, self.w), dtype=np.int32)
@@ -414,14 +434,26 @@ class MaskPainterGUI:
         self.btn_clear_mask = tk.Button(btns_frame, text='Clear Mask', command=self.clear_mask)
         self.btn_clear_mask.pack(side=tk.LEFT, padx=2)
 
+        # Brush size info
+        self.brush_info_var = tk.StringVar()
+        self.brush_info_label = tk.Label(self.left_frame, textvariable=self.brush_info_var)
+        self.brush_info_label.pack(side=tk.TOP, anchor='nw', padx=6, pady=2)
+        self.update_brush_info_label()
+
         # Canvas for mask
         self.canvas = tk.Canvas(self.left_frame, width=self.w, height=self.h, bg='black')
         self.canvas.pack(side=tk.TOP, padx=6, pady=6)
         self.canvas_img = self.canvas.create_image(0, 0, anchor='nw', image=self.mask_tk)
 
         # Mouse bindings
+        self.canvas.bind('<Button-1>', self.on_button_press)
         self.canvas.bind('<B1-Motion>', self.on_paint)
-        self.canvas.bind('<Button-1>', self.on_paint)
+        self.canvas.bind('<ButtonRelease-1>', self.on_button_release)
+        # Mouse wheel for brush size (Windows/Mac)
+        self.canvas.bind('<MouseWheel>', self.on_mouse_wheel)
+        # Mouse wheel for many Linux setups
+        self.canvas.bind('<Button-4>', self.on_mouse_wheel_linux_up)
+        self.canvas.bind('<Button-5>', self.on_mouse_wheel_linux_down)
 
         # Bottom-left: palette
         self.palette_frame = tk.Frame(self.left_frame)
@@ -440,8 +472,7 @@ class MaskPainterGUI:
         self.image_panel = tk.Label(self.right_frame)
         self.image_panel.pack(side=tk.TOP, padx=6, pady=6)
 
-        # Initialize random prompt and mask
-        self.load_random_prompt()
+        # Initialize with a random mask; prompt will match the same image
         self.load_random_mask()
 
     def build_palette_buttons(self):
@@ -472,23 +503,93 @@ class MaskPainterGUI:
             self.status_var.set('Brush: background')
         else:
             self.status_var.set(f'Brush: {label_list[class_id-1]}')
+        self.update_brush_info_label()
 
     def on_paint(self, event):
         x, y = int(event.x), int(event.y)
-        r = self.brush_radius
-        x0, x1 = max(0, x - r), min(self.w, x + r + 1)
-        y0, y1 = max(0, y - r), min(self.h, y + r + 1)
-        yy, xx = np.ogrid[y0:y1, x0:x1]
-        mask = (xx - x) ** 2 + (yy - y) ** 2 <= r ** 2
-        region = self.class_map[y0:y1, x0:x1]
-        region[mask] = self.current_class_id
-        self.class_map[y0:y1, x0:x1] = region
-        self.refresh_mask_image()
+        # Draw continuous stroke by interpolating between last and current positions
+        if self.last_paint_pos is None:
+            self._paint_circle_at(x, y)
+        else:
+            lx, ly = self.last_paint_pos
+            self._paint_line(lx, ly, x, y)
+        self.last_paint_pos = (x, y)
+        # Throttle refresh to ~60 FPS
+        self._schedule_refresh()
 
     def refresh_mask_image(self):
         self.mask_img = class_map_to_rgb(self.class_map)
         self.mask_tk = ImageTk.PhotoImage(self.mask_img)
         self.canvas.itemconfig(self.canvas_img, image=self.mask_tk)
+
+    # -------- Painting helpers and UI updates --------
+    def _paint_circle_at(self, x: int, y: int):
+        r = self.brush_radius
+        x0, x1 = max(0, x - r), min(self.w, x + r + 1)
+        y0, y1 = max(0, y - r), min(self.h, y + r + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+        yy, xx = np.ogrid[y0:y1, x0:x1]
+        mask = (xx - x) ** 2 + (yy - y) ** 2 <= r ** 2
+        region = self.class_map[y0:y1, x0:x1]
+        region[mask] = self.current_class_id
+        self.class_map[y0:y1, x0:x1] = region
+
+    def _paint_line(self, x0: int, y0: int, x1: int, y1: int):
+        dx = x1 - x0
+        dy = y1 - y0
+        dist = max(1.0, (dx * dx + dy * dy) ** 0.5)
+        step = max(1.0, self.brush_radius * 0.5)
+        steps = int(dist / step)
+        for s in range(steps + 1):
+            t = s / max(1, steps)
+            xi = int(round(x0 + t * dx))
+            yi = int(round(y0 + t * dy))
+            self._paint_circle_at(xi, yi)
+
+    def _schedule_refresh(self):
+        if not self._refresh_scheduled:
+            self._refresh_scheduled = True
+            # ~60 FPS
+            self.canvas.after(16, self._do_refresh)
+
+    def _do_refresh(self):
+        self._refresh_scheduled = False
+        self.refresh_mask_image()
+
+    def on_button_press(self, event):
+        self.last_paint_pos = (int(event.x), int(event.y))
+        self._paint_circle_at(self.last_paint_pos[0], self.last_paint_pos[1])
+        self._schedule_refresh()
+
+    def on_button_release(self, event):
+        # Ensure final refresh after stroke ends
+        self.last_paint_pos = None
+        self._do_refresh()
+
+    def update_brush_info_label(self):
+        if self.current_class_id == 0:
+            cls_name = 'background'
+        else:
+            cls_name = label_list[self.current_class_id - 1]
+        self.brush_info_var.set(f'Brush: {cls_name} | size: {self.brush_radius}px')
+
+    def on_mouse_wheel(self, event):
+        # Windows/Mac: event.delta is positive when scrolled up
+        delta = 1 if event.delta > 0 else -1
+        self._adjust_brush_size(delta)
+
+    def on_mouse_wheel_linux_up(self, event):
+        self._adjust_brush_size(1)
+
+    def on_mouse_wheel_linux_down(self, event):
+        self._adjust_brush_size(-1)
+
+    def _adjust_brush_size(self, delta: int):
+        old = self.brush_radius
+        self.brush_radius = int(np.clip(self.brush_radius + delta, 1, 128))
+        if self.brush_radius != old:
+            self.update_brush_info_label()
 
     def _set_right_panel_image(self, pil_img: Image.Image):
         """Resize and display a PIL image on the right panel to match mask size."""
@@ -504,6 +605,21 @@ class MaskPainterGUI:
         self.refresh_mask_image()
 
     def load_random_prompt(self):
+        """Pick a random caption from the current image's captions, if available.
+        Does not change mask or right-side image.
+        """
+        # Prefer dataset captions tied to current image index
+        try:
+            if self.dataset is not None and self.current_index is not None:
+                if hasattr(self.dataset, 'texts') and self.dataset.texts and len(self.dataset.texts) > self.current_index:
+                    captions = self.dataset.texts[self.current_index]
+                    if isinstance(captions, list) and len(captions) > 0:
+                        self.prompt_var.set(random.choice(captions))
+                        self.status_var.set('Random prompt picked from current image captions')
+                        return
+        except Exception:
+            pass
+        # Fallback to generic prompts
         prompts = [
             'She is a woman with blond hair. She is wearing lipstick.',
             'A smiling man with short black hair, wearing a hat.',
@@ -512,21 +628,27 @@ class MaskPainterGUI:
             'A person in a blue shirt with neat hair.'
         ]
         self.prompt_var.set(prompts[np.random.randint(0, len(prompts))])
+        self.status_var.set('Random prompt picked (generic fallback)')
 
     def load_random_mask(self):
         try:
-            # Use CelebDataset to fetch a valid mask
-            cfg = self.bundle.configs
-            dataset = CelebDataset(
-                split='train',
-                im_path=cfg['dataset_params']['im_path'],
-                im_size=cfg['dataset_params']['im_size'],
-                im_channels=cfg['dataset_params']['im_channels'],
-                use_latents=True,
-                latent_path=str(Path(cfg['train_params']['task_name']) / cfg['train_params']['vqvae_latent_dir_name']),
-                condition_config=self.ldm_config['condition_config'],
-            )
+            # Use preloaded CelebDataset if available
+            dataset = self.dataset
+            if dataset is None:
+                cfg = self.bundle.configs
+                dataset = CelebDataset(
+                    split='train',
+                    im_path=cfg['dataset_params']['im_path'],
+                    im_size=cfg['dataset_params']['im_size'],
+                    im_channels=cfg['dataset_params']['im_channels'],
+                    use_latents=True,
+                    latent_path=str(Path(cfg['train_params']['task_name']) / cfg['train_params']['vqvae_latent_dir_name']),
+                    condition_config=self.ldm_config['condition_config'],
+                )
+                self.dataset = dataset
+
             mask_idx = np.random.randint(0, len(dataset.masks))
+            self.current_index = int(mask_idx)
             mask = dataset.get_mask(mask_idx)  # CxHxW
             class_map = class_map_from_one_hot(mask)
             # Ensure expected size
@@ -603,7 +725,7 @@ def main():
     parser.add_argument('--config', type=str,
                         default='config.celebhq_text_image_cond', help='Config module path')
     parser.add_argument('--ldm_ckpt', type=str,
-                        default='runs/ddpm_20251021-011756/celebhq/ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
+                        default='runs/ddpm_20251021-140329/celebhq/ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
     parser.add_argument('--vqvae_ckpt', type=str,
                         default='runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth', help='Path to VQVAE checkpoint')
     args = parser.parse_args()
