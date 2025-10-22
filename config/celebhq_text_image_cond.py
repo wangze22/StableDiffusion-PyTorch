@@ -64,7 +64,7 @@ train_ldm_save_every_epochs = 1
 
 # Model paths
 model_paths_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'
-model_paths_ldm_ckpt_resume = 'runs/ddpm_20251022-034700/celebhq/checkpoints/epoch_003_ddpm_ckpt_text_image_cond_clip.pth'
+model_paths_ldm_ckpt_resume = 'runs/ddpm_20251022-144019/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
 
 condition_config = {
     'condition_types'       : ldm_condition_types,

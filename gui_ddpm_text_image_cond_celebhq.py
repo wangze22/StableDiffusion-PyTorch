@@ -733,12 +733,12 @@ class MaskPainterGUI:
         # Prefer dataset captions tied to current image index
         try:
             if self.dataset is not None and self.current_index is not None:
-                if hasattr(self.dataset, 'texts') and self.dataset.texts and len(self.dataset.texts) > self.current_index:
-                    captions = self.dataset.texts[self.current_index]
-                    if isinstance(captions, list) and len(captions) > 0:
-                        self.prompt_var.set(random.choice(captions))
-                        self.status_var.set('Random prompt picked from current image captions')
-                        return
+                # CelebDataset stores caption file paths in `texts` and exposes `_get_captions(index)` to read them.
+                captions = self.dataset._get_captions(self.current_index)
+                if isinstance(captions, list) and len(captions) > 0:
+                    self.prompt_var.set(random.choice(captions))
+                    self.status_var.set('Random prompt picked from current image captions')
+                    return
         except Exception:
             pass
         # Fallback to generic prompts
@@ -787,10 +787,9 @@ class MaskPainterGUI:
 
             # Also set the prompt to a caption corresponding to this image (if available)
             try:
-                if hasattr(dataset, 'texts') and dataset.texts and len(dataset.texts) > mask_idx:
-                    captions = dataset.texts[mask_idx]
-                    if isinstance(captions, list) and len(captions) > 0:
-                        self.prompt_var.set(random.choice(captions))
+                captions = dataset._get_captions(mask_idx)
+                if isinstance(captions, list) and len(captions) > 0:
+                    self.prompt_var.set(random.choice(captions))
             except Exception:
                 pass
 
@@ -891,7 +890,7 @@ def main(config_pth, ldm_ckpt, vqvae_ckpt):
 if __name__ == '__main__':
     # ------------- Configuration variables -------------
     config_pth = 'config.celebhq_text_image_cond'
-    ldm_ckpt = 'runs/ddpm_20251021-140329/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs/ddpm_20251022-144019/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest.pth'
 
     main(config_pth, ldm_ckpt, vqvae_ckpt)

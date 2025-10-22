@@ -2,6 +2,7 @@ import glob
 import os
 import random
 import torch
+import torch.nn.functional as F
 import torchvision
 import numpy as np
 from PIL import Image
@@ -38,6 +39,15 @@ class CelebDataset(Dataset):
             self.mask_w = condition_config['image_condition_config']['image_condition_w']
             
         self.images, self.texts, self.masks = self.load_images(im_path)
+        if 'text' in self.condition_types:
+            # Lazy cache so we only read a caption file the first time it is requested
+            self._caption_cache = {}
+        if not self.use_latents:
+            self.image_transform = torchvision.transforms.Compose([
+                torchvision.transforms.Resize(self.im_size),
+                torchvision.transforms.CenterCrop(self.im_size),
+                torchvision.transforms.ToTensor(),
+            ])
         
         # Whether to load images or to load latents
         if use_latents and latent_path is not None:
@@ -56,11 +66,28 @@ class CelebDataset(Dataset):
         """
         assert os.path.exists(im_path), "images path {} does not exist".format(im_path)
         ims = []
-        fnames = glob.glob(os.path.join(im_path, 'CelebA-HQ-img/*.{}'.format('png')))
-        fnames += glob.glob(os.path.join(im_path, 'CelebA-HQ-img/*.{}'.format('jpg')))
-        fnames += glob.glob(os.path.join(im_path, 'CelebA-HQ-img/*.{}'.format('jpeg')))
         texts = []
         masks = []
+        caption_dir = os.path.join(im_path, 'celeba-caption')
+        mask_dir = os.path.join(im_path, 'CelebAMask-HQ-mask')
+        img_dir = os.path.join(im_path, 'CelebA-HQ-img')
+
+        # Collect image file paths once. scandir is faster than repeated globbing and gives direct DirEntry objects.
+        entries = []
+        with os.scandir(img_dir) as it:
+            for entry in it:
+                if entry.is_file() and entry.name.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    entries.append(entry.path)
+
+        # Sort numerically when filenames are numbers, otherwise fall back to lexicographic order.
+        def _sort_key(path):
+            stem = os.path.splitext(os.path.basename(path))[0]
+            try:
+                return int(stem)
+            except ValueError:
+                return stem
+
+        entries.sort(key=_sort_key)
         
         if 'image' in self.condition_types:
             label_list = ['skin', 'nose', 'eye_g', 'l_eye', 'r_eye', 'l_brow', 'r_brow', 'l_ear', 'r_ear', 'mouth',
@@ -68,20 +95,19 @@ class CelebDataset(Dataset):
             self.idx_to_cls_map = {idx: label_list[idx] for idx in range(len(label_list))}
             self.cls_to_idx_map = {label_list[idx]: idx for idx in range(len(label_list))}
         
-        for fname in tqdm(fnames):
+        for fname in tqdm(entries):
             ims.append(fname)
-            
+
             if 'text' in self.condition_types:
                 im_name = os.path.split(fname)[1].split('.')[0]
-                captions_im = []
-                with open(os.path.join(im_path, 'celeba-caption/{}.txt'.format(im_name))) as f:
-                    for line in f.readlines():
-                        captions_im.append(line.strip())
-                texts.append(captions_im)
-                
+                caption_path = os.path.join(caption_dir, '{}.txt'.format(im_name))
+                if not os.path.exists(caption_path):
+                    raise FileNotFoundError(f'Caption file not found for image {fname}')
+                texts.append(caption_path)
+
             if 'image' in self.condition_types:
                 im_name = int(os.path.split(fname)[1].split('.')[0])
-                masks.append(os.path.join(im_path, 'CelebAMask-HQ-mask', '{}.png'.format(im_name)))
+                masks.append(os.path.join(mask_dir, '{}.png'.format(im_name)))
         if 'text' in self.condition_types:
             assert len(texts) == len(ims), "Condition Type Text but could not find captions for all images"
         if 'image' in self.condition_types:
@@ -99,12 +125,17 @@ class CelebDataset(Dataset):
         :param index:
         :return:
         """
-        mask_im = Image.open(self.masks[index])
-        mask_im = np.array(mask_im)
-        im_base = np.zeros((self.mask_h, self.mask_w, self.mask_channels))
-        for orig_idx in range(len(self.idx_to_cls_map)):
-            im_base[mask_im == (orig_idx+1), orig_idx] = 1
-        mask = torch.from_numpy(im_base).permute(2, 0, 1).float()
+        with Image.open(self.masks[index]) as mask_im:
+            mask_im = np.array(mask_im, dtype=np.int64)
+        mask_im = torch.from_numpy(mask_im)
+        mask_im = F.interpolate(
+            mask_im.unsqueeze(0).unsqueeze(0).float(),
+            size=(self.mask_h, self.mask_w),
+            mode='nearest',
+        ).squeeze().long()
+        mask_im = mask_im.clamp(0, self.mask_channels)
+        one_hot = F.one_hot(mask_im, num_classes=self.mask_channels + 1).movedim(-1, 0).float()
+        mask = one_hot[1:]  # discard background channel
         return mask
     
     def __len__(self):
@@ -114,7 +145,8 @@ class CelebDataset(Dataset):
         ######## Set Conditioning Info ########
         cond_inputs = {}
         if 'text' in self.condition_types:
-            cond_inputs['text'] = random.sample(self.texts[index], k=1)[0]
+            captions = self._get_captions(index)
+            cond_inputs['text'] = random.sample(captions, k=1)[0]
         if 'image' in self.condition_types:
             mask = self.get_mask(index)
             cond_inputs['image'] = mask
@@ -128,11 +160,7 @@ class CelebDataset(Dataset):
                 return latent, cond_inputs
         else:
             im = Image.open(self.images[index])
-            im_tensor = torchvision.transforms.Compose([
-                torchvision.transforms.Resize(self.im_size),
-                torchvision.transforms.CenterCrop(self.im_size),
-                torchvision.transforms.ToTensor(),
-            ])(im)
+            im_tensor = self.image_transform(im)
             im.close()
         
             # Convert input to -1 to 1 range.
@@ -141,3 +169,11 @@ class CelebDataset(Dataset):
                 return im_tensor
             else:
                 return im_tensor, cond_inputs
+
+    def _get_captions(self, index):
+        caption_path = self.texts[index]
+        if caption_path not in self._caption_cache:
+            with open(caption_path, 'r', encoding='utf-8') as f:
+                captions_im = [line.strip() for line in f if line.strip()]
+            self._caption_cache[caption_path] = captions_im
+        return self._caption_cache[caption_path]
