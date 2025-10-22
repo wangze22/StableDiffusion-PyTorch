@@ -16,7 +16,7 @@ ldm_down_channels = [256 // c_factor, 384 // c_factor, 512 // c_factor, 768 // c
 ldm_mid_channels = [768 // c_factor, 512 // c_factor]
 ldm_down_sample = [True, True, True]
 ldm_attn_down = [True, True, True]
-ldm_time_emb_dim = 512
+ldm_time_emb_dim = 512 // c_factor
 ldm_norm_channels = 32 // c_factor
 ldm_num_heads = 16
 ldm_conv_out_channels = 128 // c_factor
@@ -59,7 +59,7 @@ train_num_samples = 1
 train_num_grid_rows = 1
 train_ldm_lr = 5e-5
 train_save_latents = True
-train_vqvae_latent_dir_name = 'vqvae_latents'
+train_vqvae_latent_dir_name = 'vqvae_latents_22'
 train_ldm_save_every_epochs = 1
 
 # Model paths

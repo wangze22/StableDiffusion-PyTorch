@@ -11,6 +11,7 @@ from models.unet_cond_celebhq import Unet
 from cim_weight_mapper.weight_mapper import *
 from cim_qn_train.progressive_qn_train import *
 import cim_layers.register_dict as reg_dict
+
 def build_condition_config() -> dict:
     """Recreate the CelebHQ conditioning configuration used by the LDM (updated for celebhq_text_image_cond.py)."""
     return {

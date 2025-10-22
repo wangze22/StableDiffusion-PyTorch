@@ -891,7 +891,7 @@ def main(config_pth, ldm_ckpt, vqvae_ckpt):
 if __name__ == '__main__':
     # ------------- Configuration variables -------------
     config_pth = 'config.celebhq_text_image_cond'
-    ldm_ckpt = 'runs/ddpm_20251022-034700/celebhq/checkpoints/epoch_004_ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs/ddpm_20251021-140329/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest.pth'
 
     main(config_pth, ldm_ckpt, vqvae_ckpt)
