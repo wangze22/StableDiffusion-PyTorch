@@ -879,7 +879,7 @@ def main():
     parser.add_argument('--config', type=str,
                         default='config.celebhq_text_image_cond', help='Config module path')
     parser.add_argument('--ldm_ckpt', type=str,
-                        default='runs/ddpm_20251021-140329/celebhq/ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
+                        default='runs/ddpm_20251021-200743/celebhq/ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
     parser.add_argument('--vqvae_ckpt', type=str,
                         default='runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth', help='Path to VQVAE checkpoint')
     args = parser.parse_args()

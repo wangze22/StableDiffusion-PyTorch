@@ -57,7 +57,7 @@ train_params:
   ldm_epochs: 100
   num_samples: 1
   num_grid_rows: 1
-  ldm_lr: 1e-4
+  ldm_lr: 1e-5
   save_latents : True
   cf_guidance_scale : 1.0
   vae_latent_dir_name: 'vae_latents'

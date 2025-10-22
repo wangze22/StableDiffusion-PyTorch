@@ -1,4 +1,4 @@
-c_factor = 4
+c_factor = 1
 
 # Dataset configuration
 dataset_name = 'celebhq'
@@ -59,13 +59,12 @@ train_num_samples = 1
 train_num_grid_rows = 1
 train_ldm_lr = 5e-4
 train_save_latents = True
-train_cf_guidance_scale = 1.0
 train_vqvae_latent_dir_name = 'vqvae_latents'
 train_ldm_save_every_epochs = 1
 
 # Model paths
 model_paths_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'
-model_paths_ldm_ckpt_resume = 'runs/ddpm_20251021-190501/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
+model_paths_ldm_ckpt_resume = None
 
 condition_config = {
     'condition_types'       : ldm_condition_types,
