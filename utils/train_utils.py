@@ -7,6 +7,9 @@ from typing import Any, Dict, List
 
 import matplotlib.pyplot as plt
 import numpy as np
+import json
+import inspect
+import torch
 
 
 def ensure_directory(path: Path) -> None:
@@ -49,6 +52,59 @@ def create_run_artifacts(train_config: Dict[str, Any]) -> Dict[str, Any]:
         'logs_dir': logs_dir,
         'logger': logger,
     }
+
+
+def save_config_snapshot_json(logs_dir: Path, cfg_module: Any) -> Path:
+    """Serialize the given config module into a JSON file under logs_dir.
+
+    The snapshot includes two top-level keys:
+      - meta: module name and source file path
+      - config: all public (non-underscore) attributes converted to JSON-friendly forms
+
+    Returns the path to the written JSON file.
+    """
+    def _to_jsonable(obj):
+        if obj is None or isinstance(obj, (bool, int, float, str)):
+            return obj
+        if isinstance(obj, Path):
+            return str(obj)
+        if isinstance(obj, np.generic):
+            return obj.item()
+        if isinstance(obj, np.ndarray):
+            return obj.tolist()
+        if isinstance(obj, (list, tuple, set)):
+            return [_to_jsonable(x) for x in obj]
+        if isinstance(obj, dict):
+            return {str(_to_jsonable(k)): _to_jsonable(v) for k, v in obj.items()}
+        # Torch device/dtype
+        if isinstance(obj, torch.device):
+            return str(obj)
+        if hasattr(torch, 'dtype') and isinstance(obj, torch.dtype):
+            return str(obj)
+        # Fallback: string representation
+        return str(obj)
+
+    cfg_items: Dict[str, Any] = {}
+    for name in dir(cfg_module):
+        if name.startswith('_'):
+            continue
+        try:
+            val = getattr(cfg_module, name)
+        except Exception:
+            continue
+        if inspect.ismodule(val) or inspect.isfunction(val) or inspect.ismethod(val):
+            continue
+        cfg_items[name] = _to_jsonable(val)
+
+    cfg_meta = {
+        'config_module': getattr(cfg_module, '__name__', 'unknown'),
+        'config_file': getattr(cfg_module, '__file__', None),
+    }
+
+    snapshot_path = Path(logs_dir) / 'config_snapshot.json'
+    with snapshot_path.open('w', encoding='utf-8') as snapshot_file:
+        json.dump({'meta': cfg_meta, 'config': cfg_items}, snapshot_file, ensure_ascii=False, indent=2)
+    return snapshot_path
 
 
 def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -> None:

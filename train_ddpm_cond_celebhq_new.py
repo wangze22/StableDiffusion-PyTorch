@@ -3,7 +3,6 @@ import logging
 import os
 from pathlib import Path
 from typing import Dict, List
-
 import numpy as np
 import torch
 from dataset.celeb_dataset import CelebDataset
@@ -25,6 +24,7 @@ from utils.train_utils import (
     ensure_directory,
     persist_loss_history,
     plot_epoch_loss_curve,
+    save_config_snapshot_json,
     )
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
@@ -36,6 +36,8 @@ def train(num_images: int = None):
         'task_name': cfg.train_task_name,
         'ldm_output_root': cfg.train_ldm_output_root,
         })
+    # Save current config module (cfg) into a JSON snapshot (single-line helper)
+    save_config_snapshot_json(run_artifacts['logs_dir'], cfg)
     logger: logging.Logger = run_artifacts['logger']
     logger.info('Loaded config from celebhq_text_image_cond module')
     logger.info('Run artifacts directory: %s', run_artifacts['run_dir'])
