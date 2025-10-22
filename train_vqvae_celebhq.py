@@ -16,9 +16,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torchvision
+# yaml no longer required for config loading; retained for optional snapshots
 import yaml
 from torch.optim import Adam
-from torch.optim.lr_scheduler import CosineAnnealingLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau, MultiStepLR
 from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 from tqdm import tqdm
@@ -27,6 +28,8 @@ from dataset.celeb_dataset import CelebDataset
 from models.discriminator import Discriminator
 from models.lpips import LPIPS
 from models.vqvae import VQVAE
+
+from config import celebhq_vqvae as cfg
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -79,7 +82,7 @@ def create_run_directories(root: Path) -> RunArtifacts:
         samples_dir = samples_dir,
         logs_dir = logs_dir,
         logger = logger,
-        )
+    )
 
 
 def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -> None:
@@ -114,7 +117,7 @@ def save_epoch_comparisons(
         epoch_idx: int,
         samples: List[Tuple[torch.Tensor, torch.Tensor]],
         samples_dir: Path,
-        ) -> None:
+) -> None:
     if not samples:
         return
 
@@ -142,7 +145,7 @@ def plot_epoch_losses(
         epoch_idx: int,
         step_losses: Dict[str, List[float]],
         logs_dir: Path,
-        ) -> None:
+) -> None:
     if not step_losses:
         return
 
@@ -152,14 +155,14 @@ def plot_epoch_losses(
     plt.figure(figsize = (12, 8))
     has_data = False
     display_names = {
-        'recon_loss'        : 'Reconstruction',
-        'perceptual_loss'   : 'Perceptual',
-        'codebook_loss'     : 'Codebook',
-        'commitment_loss'   : 'Commitment',
+        'recon_loss': 'Reconstruction',
+        'perceptual_loss': 'Perceptual',
+        'codebook_loss': 'Codebook',
+        'commitment_loss': 'Commitment',
         'generator_adv_loss': 'Generator Adversarial',
         'discriminator_loss': 'Discriminator',
-        'total_loss'        : 'Total',
-        }
+        'total_loss': 'Total',
+    }
 
     for key, values in step_losses.items():
         if not values:
@@ -192,7 +195,7 @@ def save_weights(
         train_config: Dict[str, str],
         run_artifacts: RunArtifacts,
         epoch_idx: int,
-        ) -> Dict[str, Path]:
+) -> Dict[str, Path]:
     base_dir = run_artifacts.run_dir
     ensure_directory(base_dir)
 
@@ -219,11 +222,11 @@ def save_weights(
     torch.save(discriminator.state_dict(), discriminator_epoch_path)
 
     return {
-        'vqvae'               : vqvae_epoch_path,
-        'discriminator'       : discriminator_epoch_path,
-        'vqvae_latest'        : vqvae_base_path,
+        'vqvae': vqvae_epoch_path,
+        'discriminator': discriminator_epoch_path,
+        'vqvae_latest': vqvae_base_path,
         'discriminator_latest': discriminator_base_path,
-        }
+    }
 
 
 def load_weights(
@@ -231,7 +234,7 @@ def load_weights(
         discriminator_checkpoint_path: Path,
         vqvae: VQVAE,
         discriminator: Discriminator,
-        ) -> None:
+) -> None:
     vqvae.load_state_dict(torch.load(vqvae_checkpoint_path, map_location = device))
     discriminator.load_state_dict(torch.load(discriminator_checkpoint_path, map_location = device))
 
@@ -247,33 +250,36 @@ def infer_epoch_from_path(path: Path) -> Optional[int]:
 
 
 def train(
-        config_path: str,
-        output_root: str,
-        save_every_epochs: int,
+        output_root: Optional[str] = None,
+        save_every_epochs: Optional[int] = None,
         resume_vqvae_checkpoint: Optional[str] = None,
         resume_discriminator_checkpoint: Optional[str] = None,
         start_epoch: Optional[int] = None,
         train_imgs: Optional[int] = None,
-        ) -> None:
-    config_path = Path(config_path)
-    output_root_path = Path(output_root)
+) -> None:
+    # Resolve defaults from config
+    if output_root is None:
+        timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+        output_root_path = Path(cfg.train_vqvae_output_root) / f'vqvae_{timestamp}' / cfg.train_task_name
+    else:
+        output_root_path = Path(output_root)
     output_root_path.mkdir(parents = True, exist_ok = True)
+
+    # Determine save frequency and resume checkpoints
+    if save_every_epochs is None:
+        save_every_epochs = int(cfg.train_vqvae_save_every_epochs)
+    if resume_vqvae_checkpoint is None:
+        resume_vqvae_checkpoint = cfg.model_paths_vqvae_autoencoder_ckpt_resume
+    if resume_discriminator_checkpoint is None:
+        resume_discriminator_checkpoint = cfg.model_paths_vqvae_discriminator_ckpt_resume
 
     run_artifacts = create_run_directories(output_root_path)
     logger = run_artifacts.logger
 
-    if not config_path.exists():
-        raise FileNotFoundError(f'Config file not found: {config_path}')
-
-    with config_path.open('r') as file:
-        try:
-            config = yaml.safe_load(file)
-        except yaml.YAMLError as exc:
-            raise RuntimeError(f'Unable to parse config file {config_path}') from exc
-
-    dataset_config = deepcopy(config['dataset_params'])
-    autoencoder_config = deepcopy(config['autoencoder_params'])
-    train_config = deepcopy(config['train_params'])
+    # Load pre-assembled configs from cfg
+    dataset_config = deepcopy(getattr(cfg, 'dataset_config'))
+    autoencoder_config = deepcopy(getattr(cfg, 'autoencoder_model_config'))
+    train_config = deepcopy(getattr(cfg, 'train_config'))
 
     if dataset_config.get('name') != 'celebhq':
         raise ValueError('This script only supports the CelebHQ dataset configuration.')
@@ -281,20 +287,23 @@ def train(
     setup_seed(train_config['seed'])
 
     train_config['resumed_from'] = {
-        'vqvae'        : resume_vqvae_checkpoint,
+        'vqvae': resume_vqvae_checkpoint,
         'discriminator': resume_discriminator_checkpoint,
-        }
+    }
 
-    with (run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
-        yaml.safe_dump(
-            {
-                'config_path'       : str(config_path),
-                'dataset_params'    : dataset_config,
-                'autoencoder_params': autoencoder_config,
-                'train_params'      : train_config,
+    # Optional: persist a snapshot of the effective config
+    try:
+        with (run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
+            yaml.safe_dump(
+                {
+                    'dataset_params': dataset_config,
+                    'autoencoder_params': autoencoder_config,
+                    'train_params': train_config,
                 },
-            snapshot_file,
+                snapshot_file,
             )
+    except Exception:
+        pass
 
     logger.info('Starting VQ-VAE training')
     logger.info('Run directory: %s', run_artifacts.run_dir)
@@ -308,7 +317,7 @@ def train(
         im_path = dataset_config['im_path'],
         im_size = dataset_config['im_size'],
         im_channels = dataset_config['im_channels'],
-        )
+    )
 
     if train_imgs is not None and train_imgs > 0:
         limit = min(train_imgs, len(im_dataset))
@@ -322,7 +331,7 @@ def train(
         shuffle = True,
         num_workers = 0,
         drop_last = False,
-        )
+    )
 
     recon_criterion = torch.nn.MSELoss()
     disc_criterion = torch.nn.MSELoss()
@@ -330,13 +339,17 @@ def train(
     optimizer_d = Adam(discriminator.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
     optimizer_g = Adam(vqvae.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
 
-    min_lr = train_config.get('autoencoder_min_lr', train_config['autoencoder_lr'] * 0.1)
-    scheduler_kwargs = {
-        'T_max': max(1, train_config['autoencoder_epochs']),
-        'eta_min': min_lr,
-    }
-    scheduler_g = CosineAnnealingLR(optimizer_g, **scheduler_kwargs)
-    scheduler_d = CosineAnnealingLR(optimizer_d, **scheduler_kwargs)
+    # Learning rate schedulers:
+    # - Generator: ReduceLROnPlateau with patience=5, min_lr = initial_lr * 1e-2
+    # - Discriminator: MultiStepLR milestones at 50% and 75% of total epochs, gamma=0.1
+    initial_lr = float(train_config['autoencoder_lr'])
+    min_lr_g = initial_lr * 1e-2
+    total_epochs = int(train_config['autoencoder_epochs'])
+    # Ensure milestones are >= 1 and strictly increasing
+    milestone1 = max(1, int(round(total_epochs * 0.5)))
+    milestone2 = max(milestone1 + 1, int(round(total_epochs * 0.75)))
+    scheduler_g = ReduceLROnPlateau(optimizer_g, mode = 'min', factor = 0.1, patience = 5, min_lr = min_lr_g)
+    scheduler_d = MultiStepLR(optimizer_d, milestones = [milestone1, milestone2], gamma = 0.1)
 
     disc_step_start = train_config['disc_start']
     step_count = 0
@@ -365,8 +378,9 @@ def train(
         disc_step_start = 0  # ensure GAN losses are used when resuming
         logger.info('Resumed training from epoch index %d (next epoch %d)', start_epoch, start_epoch + 1)
         if start_epoch > 0:
-            scheduler_g.step(start_epoch)
+            # For discriminator scheduler (MultiStepLR), we can advance by epoch index
             scheduler_d.step(start_epoch)
+            # For generator scheduler (ReduceLROnPlateau), stepping requires a metric; skip on resume
 
     num_epochs = train_config['autoencoder_epochs']
 
@@ -420,7 +434,7 @@ def train(
                 disc_fake_loss = disc_criterion(
                     disc_fake_pred,
                     torch.ones_like(disc_fake_pred, device = disc_fake_pred.device),
-                    )
+                )
                 adv_loss = train_config['disc_weight'] * disc_fake_loss
 
             total_generator_loss = recon_loss + codebook_loss + commitment_loss + perceptual_loss + adv_loss
@@ -440,11 +454,11 @@ def train(
                 disc_fake_loss = disc_criterion(
                     disc_fake_pred,
                     torch.zeros_like(disc_fake_pred, device = disc_fake_pred.device),
-                    )
+                )
                 disc_real_loss = disc_criterion(
                     disc_real_pred,
                     torch.ones_like(disc_real_pred, device = disc_real_pred.device),
-                    )
+                )
                 disc_loss = train_config['disc_weight'] * (disc_fake_loss + disc_real_loss) * 0.5
                 disc_loss.backward()
                 discriminator_losses.append(disc_loss.item())
@@ -464,30 +478,30 @@ def train(
         epoch_total_loss = float(np.mean(total_losses)) if total_losses else 0.0
 
         loss_entry = {
-            'epoch'             : epoch_idx + 1,
-            'recon_loss'        : epoch_recon_loss,
-            'perceptual_loss'   : epoch_perc_loss,
-            'codebook_loss'     : epoch_codebook_loss,
-            'commitment_loss'   : epoch_commitment_loss,
+            'epoch': epoch_idx + 1,
+            'recon_loss': epoch_recon_loss,
+            'perceptual_loss': epoch_perc_loss,
+            'codebook_loss': epoch_codebook_loss,
+            'commitment_loss': epoch_commitment_loss,
             'generator_adv_loss': epoch_gen_adv_loss,
             'discriminator_loss': epoch_disc_loss,
-            'total_loss'        : epoch_total_loss,
-            }
+            'total_loss': epoch_total_loss,
+        }
         loss_history.append(loss_entry)
         persist_loss_history(loss_history, run_artifacts.logs_dir)
         plot_epoch_losses(
             epoch_idx = epoch_idx,
             step_losses = {
-                'recon_loss'        : recon_losses,
-                'perceptual_loss'   : perceptual_losses,
-                'codebook_loss'     : codebook_losses,
-                'commitment_loss'   : commitment_losses,
+                'recon_loss': recon_losses,
+                'perceptual_loss': perceptual_losses,
+                'codebook_loss': codebook_losses,
+                'commitment_loss': commitment_losses,
                 'generator_adv_loss': generator_adv_losses,
                 'discriminator_loss': discriminator_losses,
-                'total_loss'        : total_losses,
-                },
+                'total_loss': total_losses,
+            },
             logs_dir = run_artifacts.logs_dir,
-            )
+        )
         save_epoch_comparisons(epoch_idx, epoch_samples, run_artifacts.samples_dir)
 
         current_lr = optimizer_g.param_groups[0]['lr']
@@ -502,9 +516,10 @@ def train(
             epoch_gen_adv_loss,
             epoch_disc_loss,
             current_lr,
-            )
+        )
 
-        scheduler_g.step()
+        # Step schedulers: generator uses validation metric (total loss), discriminator steps per epoch
+        scheduler_g.step(epoch_total_loss)
         scheduler_d.step()
 
         should_save = ((epoch_idx + 1) % save_every_epochs == 0) or (epoch_idx + 1 == num_epochs)
@@ -515,31 +530,18 @@ def train(
                 train_config = train_config,
                 run_artifacts = run_artifacts,
                 epoch_idx = epoch_idx,
-                )
+            )
             logger.info(
                 'Saved checkpoints: latest_vqvae=%s latest_disc=%s epoch_vqvae=%s epoch_disc=%s',
                 checkpoint_paths['vqvae_latest'],
                 checkpoint_paths['discriminator_latest'],
                 checkpoint_paths['vqvae'],
                 checkpoint_paths['discriminator'],
-                )
+            )
 
     logger.info('Training complete. Artifacts stored in %s', run_artifacts.run_dir)
 
 
 if __name__ == '__main__':
-    config_path = 'config/celebhq.yaml'
-    output_root = 'runs'
-    save_every_epochs = 5
-    resume_vqvae_checkpoint = fr'runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth'
-    resume_discriminator_checkpoint = fr'runs/vqvae_20251018-222220/celebhq/vqvae_discriminator_ckpt_latest.pth'
-    train_imgs = None  # e.g. 500 to debug with a subset
-
-    train(
-        config_path = config_path,
-        output_root = output_root,
-        save_every_epochs = save_every_epochs,
-        resume_vqvae_checkpoint = resume_vqvae_checkpoint,
-        resume_discriminator_checkpoint = resume_discriminator_checkpoint,
-        train_imgs = train_imgs,
-        )
+    # Use defaults from cfg; override by passing args if needed
+    train()

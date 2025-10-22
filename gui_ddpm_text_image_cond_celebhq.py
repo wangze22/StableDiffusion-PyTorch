@@ -1,4 +1,3 @@
-import argparse
 import threading
 import time
 from dataclasses import dataclass
@@ -872,20 +871,13 @@ class MaskPainterGUI:
         threading.Thread(target=worker, daemon=True).start()
 
 
+
+
 # ------------- Main entry -------------
 
-def main():
-    parser = argparse.ArgumentParser(description='GUI for text+mask-conditional DDPM sampling on CelebHQ')
-    parser.add_argument('--config', type=str,
-                        default='config.celebhq_text_image_cond', help='Config module path')
-    parser.add_argument('--ldm_ckpt', type=str,
-                        default='runs/ddpm_20251021-200743/celebhq/ddpm_ckpt_text_image_cond_clip.pth', help='Path to LDM (Unet) checkpoint')
-    parser.add_argument('--vqvae_ckpt', type=str,
-                        default='runs/vqvae_20251018-222220/celebhq/vqvae_autoencoder_ckpt_latest.pth', help='Path to VQVAE checkpoint')
-    args = parser.parse_args()
-
+def main(config_pth, ldm_ckpt, vqvae_ckpt):
     try:
-        bundle = load_models_and_configs(args.config, Path(args.ldm_ckpt), Path(args.vqvae_ckpt))
+        bundle = load_models_and_configs(config_pth, Path(ldm_ckpt), Path(vqvae_ckpt))
     except Exception as e:
         messagebox.showerror('Initialization Error', f'Failed to load models or config: {e}')
         return
@@ -897,4 +889,9 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    # ------------- Configuration variables -------------
+    config_pth = 'config.celebhq_text_image_cond'
+    ldm_ckpt = 'runs/ddpm_20251022-034700/celebhq/checkpoints/epoch_004_ddpm_ckpt_text_image_cond_clip.pth'
+    vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest.pth'
+
+    main(config_pth, ldm_ckpt, vqvae_ckpt)

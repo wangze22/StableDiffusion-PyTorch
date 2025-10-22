@@ -5,28 +5,28 @@ os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 
 import torch
 
-import config.celebhq_params as cfg
+import config.celebhq_text_image_cond as cfg
 from cim_weight_mapper.weight_process import map_weight_for_model
 from models.unet_cond_celebhq import Unet
 from cim_weight_mapper.weight_mapper import *
 from cim_qn_train.progressive_qn_train import *
 import cim_layers.register_dict as reg_dict
 def build_condition_config() -> dict:
-    """Recreate the CelebHQ conditioning configuration used by the LDM."""
+    """Recreate the CelebHQ conditioning configuration used by the LDM (updated for celebhq_text_image_cond.py)."""
     return {
-        'condition_types': tuple(cfg.condition_types),
+        'condition_types': tuple(cfg.ldm_condition_types),
         'text_condition_config': {
-            'text_embed_model': cfg.text_condition_text_embed_model,
-            'train_text_embed_model': cfg.text_condition_train_text_embed_model,
-            'text_embed_dim': cfg.text_condition_text_embed_dim,
-            'cond_drop_prob': cfg.text_condition_cond_drop_prob,
+            'text_embed_model': cfg.ldm_text_condition_text_embed_model,
+            'train_text_embed_model': cfg.ldm_text_condition_train_text_embed_model,
+            'text_embed_dim': cfg.ldm_text_condition_text_embed_dim,
+            'cond_drop_prob': cfg.ldm_text_condition_cond_drop_prob,
         },
         'image_condition_config': {
-            'image_condition_input_channels': cfg.image_condition_input_channels,
-            'image_condition_output_channels': cfg.image_condition_output_channels,
-            'image_condition_h': cfg.image_condition_h,
-            'image_condition_w': cfg.image_condition_w,
-            'cond_drop_prob': cfg.image_condition_cond_drop_prob,
+            'image_condition_input_channels': cfg.ldm_image_condition_input_channels,
+            'image_condition_output_channels': cfg.ldm_image_condition_output_channels,
+            'image_condition_h': cfg.ldm_image_condition_h,
+            'image_condition_w': cfg.ldm_image_condition_w,
+            'cond_drop_prob': cfg.ldm_image_condition_cond_drop_prob,
         },
     }
 
@@ -95,12 +95,13 @@ def main():
     #     adc_gain_range = [1, 255],
     #     adc_adjust_mode = 'gain'
     #     )
+    array_size = [576,2048]
     model_weight_mapping_info = map_weight_for_model(model,
                                                      module_for_map = reg_dict.op_layers,
                                                      draw_weight_block = True,
                                                      array_device_name = 'TC05',
-                                                     array_size = [576, 2048],
-                                                     weight_block_size = [576, 128])
+                                                     array_size = array_size,
+                                                     weight_block_size = array_size)
 
 if __name__ == '__main__':
     main()
