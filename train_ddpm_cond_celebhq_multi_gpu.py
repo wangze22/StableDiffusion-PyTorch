@@ -47,9 +47,9 @@ except (RuntimeError, AttributeError):
     # Fallback when the sharing strategy is not supported on the platform.
     pass
 
-DEFAULT_DATALOADER_WORKERS = int(os.environ.get('TRAIN_DATALOADER_WORKERS', '4'))
+DEFAULT_DATALOADER_WORKERS = int(os.environ.get('TRAIN_DATALOADER_WORKERS', '8'))
 print(f'DEFAULT_DATALOADER_WORKERS: {DEFAULT_DATALOADER_WORKERS}')
-DEFAULT_PREFETCH_FACTOR = int(os.environ.get('TRAIN_DATALOADER_PREFETCH', '2'))
+DEFAULT_PREFETCH_FACTOR = int(os.environ.get('TRAIN_DATALOADER_PREFETCH', '8'))
 _FD_PER_WORKER_ESTIMATE = 4
 _FD_RESERVE = 32
 

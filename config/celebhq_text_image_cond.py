@@ -22,7 +22,7 @@ if environment == 'server':
 else:
     # Use current working directory as data path when running locally
     dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
-    model_paths_ldm_ckpt_resume = 'runs/ddpm_20251023-225302/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
+    model_paths_ldm_ckpt_resume = 'runs/ddpm_20251024-000346/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
 
 dataset_im_channels = 3
 dataset_im_size = 256
