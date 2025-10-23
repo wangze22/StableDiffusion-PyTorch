@@ -10,6 +10,7 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.amp import autocast, GradScaler
 
 from models.unet_cond_base import Unet
 
@@ -101,9 +102,21 @@ def train(num_images: int = None):
         im_channels = cfg.autoencoder_z_channels,
         model_config = cfg.diffusion_model_config,
         ).to(device)
+
+    # Create EMA model
+    ema_model = Unet(
+        im_channels = cfg.autoencoder_z_channels,
+        model_config = cfg.diffusion_model_config,
+        ).to(device)
+    ema_model.load_state_dict(model.state_dict())
+    ema_model.eval()
+    for param in ema_model.parameters():
+        param.requires_grad = False
+
     resume_path = cfg.model_paths_ldm_ckpt_resume
     if resume_path is not None:
         model.load_state_dict(torch.load(str(resume_path), map_location = device))
+        ema_model.load_state_dict(torch.load(str(resume_path), map_location = device))
         logger.info(f'Loaded ldm model {resume_path}')
     model.train()
 
@@ -111,10 +124,14 @@ def train(num_images: int = None):
     num_epochs = cfg.train_ldm_epochs
     optimizer = Adam(model.parameters(), lr = cfg.train_ldm_lr)
     criterion = torch.nn.MSELoss()
+    use_amp = device.type == 'cuda'
+    scaler = GradScaler('cuda', enabled = use_amp)
+    if use_amp:
+        logger.info('Using mixed precision (CUDA AMP) for training')
 
     lr_scheduler = ReduceLROnPlateau(
         optimizer,
-        patience = 5,
+        patience = 10,
         factor = 0.5,
         min_lr = 1e-7,
         )
@@ -163,12 +180,21 @@ def train(num_images: int = None):
             t = torch.randint(0, cfg.diffusion_num_timesteps, (im.shape[0],)).to(device)
             # Add noise to images according to timestep
             noisy_im = scheduler.add_noise(im, noise, t)
-            noise_pred = model(noisy_im, t, cond_input = cond_input)
-            loss = criterion(noise_pred, noise)
+            with autocast(device_type = 'cuda', enabled=use_amp, dtype=torch.bfloat16):
+                noise_pred = model(noisy_im, t, cond_input = cond_input)
+                loss = criterion(noise_pred, noise)
             epoch_losses.append(loss.item())
             progress_bar.set_postfix(loss = f'{loss.item():.4f}')
-            loss.backward()
-            optimizer.step()
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+
+            # Update EMA model
+            with torch.no_grad():
+                for ema_param, param in zip(ema_model.parameters(), model.parameters()):
+                    ema_param.data = ema_param.data * 0.9999 + param.data * (1 - 0.9999)
 
         avg_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
         lr_scheduler.step(avg_loss)
@@ -188,17 +214,30 @@ def train(num_images: int = None):
         should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == num_epochs)
         if should_save:
             state_dict = model.state_dict()
+            ema_state_dict = ema_model.state_dict()
             checkpoints_dir = run_artifacts['checkpoints_dir']
+
+            # Save regular model
             latest_ckpt_path = run_artifacts['run_dir'] / cfg.model_paths_ldm_ckpt_name
             epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{cfg.model_paths_ldm_ckpt_name}'
             torch.save(state_dict, latest_ckpt_path)
             torch.save(state_dict, epoch_ckpt_path)
             legacy_ckpt_path = legacy_ckpt_dir / cfg.model_paths_ldm_ckpt_name
             torch.save(state_dict, legacy_ckpt_path)
+
+            # Save EMA model
+            ema_latest_ckpt_path = run_artifacts['run_dir'] / f'ema_{cfg.model_paths_ldm_ckpt_name}'
+            ema_epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_ema_{cfg.model_paths_ldm_ckpt_name}'
+            torch.save(ema_state_dict, ema_latest_ckpt_path)
+            torch.save(ema_state_dict, ema_epoch_ckpt_path)
+            ema_legacy_ckpt_path = legacy_ckpt_dir / f'ema_{cfg.model_paths_ldm_ckpt_name}'
+            torch.save(ema_state_dict, ema_legacy_ckpt_path)
+
             logger.info(
-                'Saved checkpoints: latest=%s | epoch=%s',
+                'Saved checkpoints: latest=%s | epoch=%s | ema_latest=%s',
                 latest_ckpt_path,
                 epoch_ckpt_path,
+                ema_latest_ckpt_path,
                 )
 
     logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
