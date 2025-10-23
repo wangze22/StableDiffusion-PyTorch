@@ -33,7 +33,7 @@ from utils.train_utils import (
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 EMA_DECAY = 0.9999
 DEFAULT_BACKEND = 'gloo' if os.name == 'nt' else 'nccl'
-
+use_amp = True
 
 def _init_distributed_if_needed(local_rank: int, backend: str) -> bool:
     """Initialise a distributed process group when local_rank is provided."""
@@ -172,8 +172,9 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
     model_module = model.module if isinstance(model, DDP) else model
     optimizer = Adam(model.parameters(), lr=cfg.train_ldm_lr)
     criterion = torch.nn.MSELoss()
-    use_amp = device.type == 'cuda'
-    scaler = GradScaler(device_type=device_type, enabled=use_amp)
+
+    scaler = GradScaler(device=device_type, enabled=True)
+
     if use_amp and is_main_process:
         logger.info('Using mixed precision (CUDA AMP) for training')
 

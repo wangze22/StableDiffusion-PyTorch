@@ -2,7 +2,28 @@ c_factor = 1
 
 # Dataset configuration
 dataset_name = 'celebhq'
-dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
+
+# Auto-detect environment: 'server' if multiple GPUs, else 'local'
+import os
+try:
+    import torch  # type: ignore
+    _gpu_count = torch.cuda.device_count()
+except Exception:
+    _gpu_count = 0
+print(f'Detected {_gpu_count} GPUs')
+
+environment = 'server' if _gpu_count > 1 else 'local'
+
+# Dataset path depends on environment
+if environment == 'server':
+    dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
+    model_paths_ldm_ckpt_resume = 'runs/ema_ddpm_ckpt_text_image_cond_clip.pth'
+
+else:
+    # Use current working directory as data path when running locally
+    dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
+    model_paths_ldm_ckpt_resume = 'runs/ddpm_20251023-225302/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
+
 dataset_im_channels = 3
 dataset_im_size = 256
 
@@ -64,7 +85,6 @@ train_ldm_save_every_epochs = 1
 
 # Model paths
 model_paths_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'
-model_paths_ldm_ckpt_resume = 'runs/ddpm_20251023-203734/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
 
 condition_config = {
     'condition_types'       : ldm_condition_types,
