@@ -13,6 +13,9 @@ from PIL import Image, UnidentifiedImageError, ImageFile
 ImageFile.LOAD_TRUNCATED_IMAGES = True  # 允许读取被截断的图像，减少 OSError
 
 
+_GLOBAL_IMAGE_CACHE = {}
+_GLOBAL_LATENT_CACHE = {}
+
 class CelebDataset(Dataset):
     r"""
     Celeb dataset will by default centre crop and resize the images.
@@ -51,11 +54,14 @@ class CelebDataset(Dataset):
         
         # Whether to load images or to load latents
         if use_latents and latent_path is not None:
+            cache_key = (latent_path,)
+            cached_latents = _GLOBAL_LATENT_CACHE.get(cache_key)
             latents = self._prepare_latents(latent_path)
             if latents is not None:
                 self.use_latents = True
                 self._latents = latents
-                print('Found {} latents'.format(self._latents.shape[0]))
+                if cached_latents is None:
+                    print('Found {} latents'.format(self._latents.shape[0]))
             else:
                 print('Latents not found')
     
@@ -71,6 +77,11 @@ class CelebDataset(Dataset):
         caption_dir = os.path.join(im_path, 'celeba-caption')
         mask_dir = os.path.join(im_path, 'CelebAMask-HQ-mask')
         img_dir = os.path.join(im_path, 'CelebA-HQ-img')
+
+        cache_key = (img_dir, tuple(self.condition_types))
+        cached = _GLOBAL_IMAGE_CACHE.get(cache_key)
+        if cached is not None:
+            return cached['images'][:], cached['texts'][:], cached['masks'][:]
 
         # Collect image file paths once. scandir is faster than repeated globbing and gives direct DirEntry objects.
         entries = []
@@ -115,9 +126,19 @@ class CelebDataset(Dataset):
         print('Found {} images'.format(len(ims)))
         print('Found {} masks'.format(len(masks)))
         print('Found {} captions'.format(len(texts)))
+        _GLOBAL_IMAGE_CACHE[cache_key] = {
+            'images': ims,
+            'texts': texts,
+            'masks': masks,
+        }
         return ims, texts, masks
 
     def _prepare_latents(self, latent_path):
+        cache_key = (latent_path,)
+        cached = _GLOBAL_LATENT_CACHE.get(cache_key)
+        if cached is not None:
+            return cached
+
         latent_maps = load_latents(latent_path)
         if len(latent_maps) != len(self.images):
             return None
@@ -137,6 +158,7 @@ class CelebDataset(Dataset):
         latents_tensor = torch.stack(latents).contiguous()
         latents_tensor.share_memory_()
         del latent_maps
+        _GLOBAL_LATENT_CACHE[cache_key] = latents_tensor
         return latents_tensor
 
     def get_mask(self, index):

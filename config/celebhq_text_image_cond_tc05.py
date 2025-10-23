@@ -10,14 +10,16 @@ try:
     _gpu_count = torch.cuda.device_count()
 except Exception:
     _gpu_count = 0
-print(f'Detected {_gpu_count} GPUs')
+if os.environ.get('CFG_GPU_MSG_PRINTED', '0') != '1':
+    print(f'Detected {_gpu_count} GPUs')
+    os.environ['CFG_GPU_MSG_PRINTED'] = '1'
 
 environment = 'server' if _gpu_count > 1 else 'local'
 
 # Dataset path depends on environment
 if environment == 'server':
     dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
-    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05/ddpm_20251024-041100/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
+    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05/ddpm_20251024-042517/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
 
 else:
     # Use current working directory as data path when running locally
