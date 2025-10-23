@@ -228,13 +228,13 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
         sampler = sampler,
         pin_memory = (device.type == 'cuda'),
         num_workers = num_workers,
-        persistent_workers = num_workers > 0,
+        # persistent_workers = num_workers > 0,
         )
-    if num_workers > 0:
-        dataloader_kwargs.update(
-            # prefetch_factor=prefetch_factor,
-            multiprocessing_context = mp.get_context('spawn'),
-            )
+    # if num_workers > 0:
+    #     dataloader_kwargs.update(
+    #         # prefetch_factor=prefetch_factor,
+    #         multiprocessing_context = mp.get_context('spawn'),
+    #         )
 
     data_loader = DataLoader(im_dataset, **dataloader_kwargs)
 
