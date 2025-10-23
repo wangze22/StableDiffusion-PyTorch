@@ -183,11 +183,29 @@ def train(num_images: int = None):
             with autocast(device_type = 'cuda', enabled=use_amp, dtype=torch.bfloat16):
                 noise_pred = model(noisy_im, t, cond_input = cond_input)
                 loss = criterion(noise_pred, noise)
+
+            # 检查 loss 是否有效
+            if not torch.isfinite(loss):
+                print("⚠️ Skipping step due to non-finite loss (NaN or Inf)")
+                optimizer.zero_grad(set_to_none = True)
+                continue  # 跳过当前 batch
+
             epoch_losses.append(loss.item())
             progress_bar.set_postfix(loss = f'{loss.item():.4f}')
+
+            # 反向传播 + 梯度处理
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            # 计算并检查梯度范数
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+
+            if not torch.isfinite(grad_norm):
+                print("⚠️ Skipping optimizer.step() due to non-finite gradients")
+                optimizer.zero_grad(set_to_none = True)
+                scaler.update()  # 仍然更新 Scaler 防止停住
+                continue  # 跳过 step()
+
             scaler.step(optimizer)
             scaler.update()
 
