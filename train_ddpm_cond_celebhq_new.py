@@ -32,7 +32,7 @@ from utils.train_utils import (
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
+num_workers = 4
 def train(num_images: int = None):
     run_artifacts = create_run_artifacts({
         'task_name': cfg.train_task_name,
@@ -96,6 +96,9 @@ def train(num_images: int = None):
         im_dataset,
         batch_size = cfg.train_ldm_batch_size,
         shuffle = True,
+        num_workers = num_workers,
+        pin_memory = True,
+        persistent_workers = num_workers > 0,
         )
 
     # Instantiate the unet model

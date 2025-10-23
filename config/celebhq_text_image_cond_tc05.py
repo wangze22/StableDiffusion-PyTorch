@@ -17,7 +17,7 @@ environment = 'server' if _gpu_count > 1 else 'local'
 # Dataset path depends on environment
 if environment == 'server':
     dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
-    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05/ddpm_20251024-033635/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
+    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05/ddpm_20251024-041100/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
 
 else:
     # Use current working directory as data path when running locally

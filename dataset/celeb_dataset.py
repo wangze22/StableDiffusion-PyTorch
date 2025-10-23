@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import numpy as np
+from functools import lru_cache
 from utils.diffusion_utils import load_latents
 from tqdm import tqdm
 from torch.utils.data.dataset import Dataset
@@ -28,6 +29,7 @@ class CelebDataset(Dataset):
         self.im_path = im_path
         self.latent_maps = None
         self.use_latents = False
+        self._latents = None
         
         self.condition_types = [] if condition_config is None else condition_config['condition_types']
         
@@ -40,9 +42,6 @@ class CelebDataset(Dataset):
             self.mask_w = condition_config['image_condition_config']['image_condition_w']
             
         self.images, self.texts, self.masks = self.load_images(im_path)
-        if 'text' in self.condition_types:
-            # Lazy cache so we only read a caption file the first time it is requested
-            self._caption_cache = {}
         if not self.use_latents:
             self.image_transform = torchvision.transforms.Compose([
                 torchvision.transforms.Resize(self.im_size),
@@ -52,11 +51,11 @@ class CelebDataset(Dataset):
         
         # Whether to load images or to load latents
         if use_latents and latent_path is not None:
-            latent_maps = load_latents(latent_path)
-            if len(latent_maps) == len(self.images):
+            latents = self._prepare_latents(latent_path)
+            if latents is not None:
                 self.use_latents = True
-                self.latent_maps = latent_maps
-                print('Found {} latents'.format(len(self.latent_maps)))
+                self._latents = latents
+                print('Found {} latents'.format(self._latents.shape[0]))
             else:
                 print('Latents not found')
     
@@ -118,6 +117,28 @@ class CelebDataset(Dataset):
         print('Found {} captions'.format(len(texts)))
         return ims, texts, masks
 
+    def _prepare_latents(self, latent_path):
+        latent_maps = load_latents(latent_path)
+        if len(latent_maps) != len(self.images):
+            return None
+
+        latents = []
+        for img_path in self.images:
+            latent = latent_maps.get(img_path)
+            if latent is None:
+                latent = latent_maps.get(os.path.basename(img_path))
+            if latent is None:
+                return None
+            latents.append(torch.as_tensor(latent).detach().cpu())
+
+        if not latents:
+            return None
+
+        latents_tensor = torch.stack(latents).contiguous()
+        latents_tensor.share_memory_()
+        del latent_maps
+        return latents_tensor
+
     def get_mask(self, index):
         r"""
         Method to get the mask of WxH ...
@@ -155,8 +176,8 @@ class CelebDataset(Dataset):
             cond_inputs['image'] = mask
         #######################################
 
-        if self.use_latents:
-            latent = self.latent_maps[self.images[index]]
+        if self.use_latents and self._latents is not None:
+            latent = self._latents[index]
             if len(self.condition_types) == 0:
                 return latent
             else:
@@ -185,8 +206,11 @@ class CelebDataset(Dataset):
 
     def _get_captions(self, index):
         caption_path = self.texts[index]
-        if caption_path not in self._caption_cache:
-            with open(caption_path, 'r', encoding='utf-8') as f:
-                captions_im = [line.strip() for line in f if line.strip()]
-            self._caption_cache[caption_path] = captions_im
-        return self._caption_cache[caption_path]
+        return _read_captions(caption_path)
+
+
+@lru_cache(maxsize = 4096)
+def _read_captions(caption_path: str):
+    with open(caption_path, 'r', encoding = 'utf-8') as f:
+        captions_im = tuple(line.strip() for line in f if line.strip())
+    return captions_im
