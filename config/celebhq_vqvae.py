@@ -1,9 +1,24 @@
 # Flat Python config for VQ-VAE training on CelebHQ
 # Reference: train_ddpm_cond_celebhq_new.py and config/celebhq_text_image_cond.py
+try:
+    import torch  # type: ignore
+    _gpu_count = torch.cuda.device_count()
+except Exception:
+    _gpu_count = 0
+print(f'Detected {_gpu_count} GPUs')
+
+environment = 'server' if _gpu_count > 1 else 'local'
+
+# Dataset path depends on environment
+if environment == 'server':
+    dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
+
+else:
+    # Use current working directory as data path when running locally
+    dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
 
 # Dataset configuration
 dataset_name = 'celebhq'
-dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
 dataset_im_channels = 3
 dataset_im_size = 256
 
