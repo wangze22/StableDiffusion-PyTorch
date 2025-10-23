@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 import numpy as np
 import torch
 import torch.distributed as dist
+import torch.multiprocessing as mp
 from dataset.celeb_dataset import CelebDataset
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
@@ -29,6 +30,11 @@ from utils.train_utils import (
     plot_epoch_loss_curve,
     save_config_snapshot_json,
 )
+#
+# try:
+#     mp.set_start_method("spawn", force=True)
+# except RuntimeError:
+#     pass
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 EMA_DECAY = 0.9999
@@ -138,6 +144,18 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
         sampler=sampler,
         pin_memory=device.type == 'cuda',
     )
+
+    # data_loader = DataLoader(
+    #     im_dataset,
+    #     batch_size = cfg.train_ldm_batch_size,  # 每卡 batch（保持不变）
+    #     shuffle = sampler is None,
+    #     sampler = sampler,
+    #     pin_memory = (device.type == 'cuda'),
+    #     num_workers = 4,  # 先用 4/卡，确认能跑
+    #     prefetch_factor = 2,  # 小一点，先稳
+    #     persistent_workers = True,
+    #     multiprocessing_context = mp.get_context("spawn"),
+    #     )
 
     model = Unet(
         im_channels=cfg.autoencoder_z_channels,
@@ -339,10 +357,31 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
         dist.destroy_process_group()
 
 
+def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
+    """Configure per-process environment and launch distributed training worker."""
+    os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+    os.environ.setdefault('MASTER_PORT', '29500')
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['RANK'] = str(rank)
+    os.environ['LOCAL_RANK'] = str(rank)
+    train(num_images=num_images, local_rank=rank, backend=backend)
+
+
 if __name__ == '__main__':
     # Configure launch parameters here; edit as needed before running.
     num_images = 3000000
     local_rank = int(os.environ.get('LOCAL_RANK', -1))
     backend = DEFAULT_BACKEND
 
-    train(num_images=num_images, local_rank=local_rank, backend=backend)
+    if local_rank < 0 and torch.cuda.device_count() > 1:
+        world_size = torch.cuda.device_count()
+        os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+        os.environ.setdefault('MASTER_PORT', '29500')
+        mp.spawn(
+            _distributed_worker,
+            args=(world_size, num_images, backend),
+            nprocs=world_size,
+            join=True,
+        )
+    else:
+        train(num_images=num_images, local_rank=local_rank, backend=backend)
