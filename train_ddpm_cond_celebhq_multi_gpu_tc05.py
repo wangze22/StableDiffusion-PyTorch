@@ -19,7 +19,7 @@ from tqdm import tqdm
 from models.unet_cond_base import Unet
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
-from config import celebhq_text_image_cond as cfg
+from config import celebhq_text_image_cond_tc05 as cfg
 from utils.config_utils import validate_image_config, validate_text_config
 from utils.diffusion_utils import *
 from utils.text_utils import *
