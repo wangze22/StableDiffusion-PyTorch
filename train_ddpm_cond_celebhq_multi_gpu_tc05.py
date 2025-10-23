@@ -1,9 +1,11 @@
 import logging
 import os
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
+import psutil
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
@@ -29,7 +31,8 @@ from utils.train_utils import (
     persist_loss_history,
     plot_epoch_loss_curve,
     save_config_snapshot_json,
-)
+    )
+
 #
 # try:
 #     mp.set_start_method("spawn", force=True)
@@ -49,7 +52,7 @@ except (RuntimeError, AttributeError):
 
 DEFAULT_DATALOADER_WORKERS = int(os.environ.get('TRAIN_DATALOADER_WORKERS', '8'))
 print(f'DEFAULT_DATALOADER_WORKERS: {DEFAULT_DATALOADER_WORKERS}')
-DEFAULT_PREFETCH_FACTOR = int(os.environ.get('TRAIN_DATALOADER_PREFETCH', '2'))
+# DEFAULT_PREFETCH_FACTOR = int(os.environ.get('TRAIN_DATALOADER_PREFETCH', '2'))
 _FD_PER_WORKER_ESTIMATE = 4
 _FD_RESERVE = 32
 
@@ -83,6 +86,7 @@ def _resolve_dataloader_workers(desired_workers: int, world_size: int) -> Tuple[
 
     return max(workers, 0), soft_limit
 
+
 def _init_distributed_if_needed(local_rank: int, backend: str) -> bool:
     """Initialise a distributed process group when local_rank is provided."""
     if local_rank < 0:
@@ -94,7 +98,7 @@ def _init_distributed_if_needed(local_rank: int, backend: str) -> bool:
 
     torch.cuda.set_device(local_rank)
     if not dist.is_initialized():
-        dist.init_process_group(backend=backend)
+        dist.init_process_group(backend = backend)
     return True
 
 
@@ -107,10 +111,12 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
 
     run_artifacts: Optional[Dict[str, Path]] = None
     if is_main_process:
-        run_artifacts = create_run_artifacts({
-            'task_name': cfg.train_task_name,
-            'ldm_output_root': cfg.train_ldm_output_root,
-        })
+        run_artifacts = create_run_artifacts(
+            {
+                'task_name'      : cfg.train_task_name,
+                'ldm_output_root': cfg.train_ldm_output_root,
+                },
+            )
         save_config_snapshot_json(run_artifacts['logs_dir'], cfg)
         logger: logging.Logger = run_artifacts['logger']
         logger.info('Loaded config from celebhq_text_image_cond module')
@@ -128,10 +134,10 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
         ensure_directory(legacy_ckpt_dir)
 
     scheduler = LinearNoiseScheduler(
-        num_timesteps=cfg.diffusion_num_timesteps,
-        beta_start=cfg.diffusion_beta_start,
-        beta_end=cfg.diffusion_beta_end,
-    )
+        num_timesteps = cfg.diffusion_num_timesteps,
+        beta_start = cfg.diffusion_beta_start,
+        beta_end = cfg.diffusion_beta_end,
+        )
 
     condition_types: List[str] = []
     text_tokenizer = None
@@ -144,26 +150,26 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
             with torch.no_grad():
                 text_tokenizer, text_model = get_tokenizer_and_model(
                     cfg.ldm_text_condition_text_embed_model,
-                    device=device,
-                )
+                    device = device,
+                    )
                 empty_text_embed = get_text_representation([''], text_tokenizer, text_model, device)
 
     im_dataset_cls = {
         'celebhq': CelebDataset,
-    }.get(cfg.dataset_name)
+        }.get(cfg.dataset_name)
 
     if im_dataset_cls is None:
         raise ValueError(f'Unknown dataset name: {cfg.dataset_name}')
 
     im_dataset = im_dataset_cls(
-        split='train',
-        im_path=cfg.dataset_im_path,
-        im_size=cfg.dataset_im_size,
-        im_channels=cfg.dataset_im_channels,
-        use_latents=True,
-        latent_path=cfg.train_vqvae_latent_dir_name,
-        condition_config=cfg.condition_config,
-    )
+        split = 'train',
+        im_path = cfg.dataset_im_path,
+        im_size = cfg.dataset_im_size,
+        im_channels = cfg.dataset_im_channels,
+        use_latents = True,
+        latent_path = cfg.train_vqvae_latent_dir_name,
+        condition_config = cfg.condition_config,
+        )
 
     if num_images is not None:
         max_samples = min(num_images, len(im_dataset))
@@ -173,36 +179,36 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
     if distributed:
         sampler = DistributedSampler(
             im_dataset,
-            num_replicas=dist.get_world_size(),
-            rank=dist.get_rank(),
-            shuffle=True,
-            drop_last=False,
-        )
+            num_replicas = dist.get_world_size(),
+            rank = dist.get_rank(),
+            shuffle = True,
+            drop_last = False,
+            )
 
     world_size = dist.get_world_size() if distributed else 1
     num_workers, soft_limit = _resolve_dataloader_workers(DEFAULT_DATALOADER_WORKERS, world_size)
     print(f'num_workers: {num_workers}')
     print(f'soft_limit: {soft_limit}')
-    prefetch_factor = max(1, DEFAULT_PREFETCH_FACTOR)
-    if 'image' in condition_types and cfg.condition_config is not None:
-        img_cfg = cfg.condition_config.get('image_condition_config', {})
-        mask_channels = int(img_cfg.get('image_condition_input_channels', 0))
-        mask_h = int(img_cfg.get('image_condition_h', 0))
-        mask_w = int(img_cfg.get('image_condition_w', 0))
-        if mask_channels > 0 and mask_h > 0 and mask_w > 0:
-            mask_bytes_per_sample = mask_channels * mask_h * mask_w  # uint8 in dataset
-            batch_bytes = mask_bytes_per_sample * cfg.train_ldm_batch_size
-            # Cap prefetch so queued host tensors stay within ~512MB budget.
-            memory_budget = 512 * 1024 * 1024
-            max_prefetch = max(1, memory_budget // max(batch_bytes, 1))
-            if prefetch_factor > max_prefetch:
-                if is_main_process:
-                    logger.warning(
-                        'Reducing dataloader prefetch_factor from %d to %d to limit host memory usage for image conditioning.',
-                        prefetch_factor,
-                        max_prefetch,
-                    )
-                prefetch_factor = max_prefetch
+    # prefetch_factor = max(1, DEFAULT_PREFETCH_FACTOR)
+    # if 'image' in condition_types and cfg.condition_config is not None:
+    # img_cfg = cfg.condition_config.get('image_condition_config', {})
+    # mask_channels = int(img_cfg.get('image_condition_input_channels', 0))
+    # mask_h = int(img_cfg.get('image_condition_h', 0))
+    # mask_w = int(img_cfg.get('image_condition_w', 0))
+    # if mask_channels > 0 and mask_h > 0 and mask_w > 0:
+    # mask_bytes_per_sample = mask_channels * mask_h * mask_w  # uint8 in dataset
+    # batch_bytes = mask_bytes_per_sample * cfg.train_ldm_batch_size
+    # Cap prefetch so queued host tensors stay within ~512MB budget.
+    # memory_budget = 512 * 1024 * 1024
+    # max_prefetch = max(1, memory_budget // max(batch_bytes, 1))
+    # if prefetch_factor > max_prefetch:
+    #     if is_main_process:
+    #         logger.warning(
+    #             'Reducing dataloader prefetch_factor from %d to %d to limit host memory usage for image conditioning.',
+    #             prefetch_factor,
+    #             max_prefetch,
+    #         )
+    #     prefetch_factor = max_prefetch
 
     if is_main_process:
         logger.info(
@@ -210,37 +216,37 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
             num_workers,
             world_size,
             str(soft_limit) if soft_limit is not None else 'unknown',
-        )
+            )
         if num_workers == 0:
             logger.warning(
-                'Falling back to single-process data loading to stay within file descriptor limits.'
-            )
+                'Falling back to single-process data loading to stay within file descriptor limits.',
+                )
 
     dataloader_kwargs = dict(
-        batch_size=cfg.train_ldm_batch_size,
-        shuffle=sampler is None,
-        sampler=sampler,
-        pin_memory=(device.type == 'cuda'),
-        num_workers=num_workers,
-        persistent_workers=num_workers > 0,
-    )
+        batch_size = cfg.train_ldm_batch_size,
+        shuffle = sampler is None,
+        sampler = sampler,
+        pin_memory = (device.type == 'cuda'),
+        num_workers = num_workers,
+        persistent_workers = num_workers > 0,
+        )
     if num_workers > 0:
         dataloader_kwargs.update(
-            prefetch_factor=prefetch_factor,
-            multiprocessing_context=mp.get_context('spawn'),
-        )
+            # prefetch_factor=prefetch_factor,
+            multiprocessing_context = mp.get_context('spawn'),
+            )
 
     data_loader = DataLoader(im_dataset, **dataloader_kwargs)
 
     model = Unet(
-        im_channels=cfg.autoencoder_z_channels,
-        model_config=cfg.diffusion_model_config,
-    ).to(device)
+        im_channels = cfg.autoencoder_z_channels,
+        model_config = cfg.diffusion_model_config,
+        ).to(device)
 
     ema_model = Unet(
-        im_channels=cfg.autoencoder_z_channels,
-        model_config=cfg.diffusion_model_config,
-    ).to(device)
+        im_channels = cfg.autoencoder_z_channels,
+        model_config = cfg.diffusion_model_config,
+        ).to(device)
     ema_model.load_state_dict(model.state_dict())
     ema_model.eval()
     for param in ema_model.parameters():
@@ -248,8 +254,8 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
 
     resume_path = cfg.model_paths_ldm_ckpt_resume
     if resume_path is not None:
-        model.load_state_dict(torch.load(str(resume_path), map_location=device))
-        ema_model.load_state_dict(torch.load(str(resume_path), map_location=device))
+        model.load_state_dict(torch.load(str(resume_path), map_location = device))
+        ema_model.load_state_dict(torch.load(str(resume_path), map_location = device))
         if is_main_process:
             logger.info('Loaded LDM checkpoint from %s', resume_path)
     model.train()
@@ -257,32 +263,33 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
     if distributed:
         model = DDP(
             model,
-            device_ids=[local_rank],
-            output_device=local_rank,
-            broadcast_buffers=False,
-        )
+            device_ids = [local_rank],
+            output_device = local_rank,
+            broadcast_buffers = False,
+            )
 
     model_module = model.module if isinstance(model, DDP) else model
-    optimizer = Adam(model.parameters(), lr=cfg.train_ldm_lr)
+    optimizer = Adam(model.parameters(), lr = cfg.train_ldm_lr)
     criterion = torch.nn.MSELoss()
 
-    scaler = GradScaler(device=device_type, enabled=True)
+    scaler = GradScaler(device = device_type, enabled = True)
 
     if use_amp and is_main_process:
         logger.info('Using mixed precision (CUDA AMP) for training')
 
     lr_scheduler = ReduceLROnPlateau(
         optimizer,
-        patience=10,
-        factor=0.5,
-        min_lr=1e-7,
-    )
+        patience = 10,
+        factor = 0.5,
+        min_lr = 1e-7,
+        )
 
     autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
     if device_type == 'cuda':
         autocast_kwargs['dtype'] = torch.bfloat16
 
     for epoch_idx in range(cfg.train_ldm_epochs):
+        epoch_start_time = time.time()
         if sampler is not None:
             sampler.set_epoch(epoch_idx)
 
@@ -291,10 +298,10 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
         num_batches = 0.0
         progress_bar = tqdm(
             data_loader,
-            desc=f'Epoch {epoch_idx + 1}/{cfg.train_ldm_epochs}',
-            leave=False,
-            disable=not is_main_process,
-        )
+            desc = f'Epoch {epoch_idx + 1}/{cfg.train_ldm_epochs}',
+            leave = False,
+            disable = not is_main_process,
+            )
 
         for data in progress_bar:
             cond_input = None
@@ -303,8 +310,8 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
             else:
                 im = data
 
-            optimizer.zero_grad(set_to_none=True)
-            im = im.float().to(device, non_blocking=True)
+            optimizer.zero_grad(set_to_none = True)
+            im = im.float().to(device, non_blocking = True)
 
             if cond_input is not None and 'text' in condition_types:
                 with torch.no_grad():
@@ -315,46 +322,46 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
                         text_tokenizer,
                         text_model,
                         device,
-                    )
+                        )
                     text_condition = drop_text_condition(
                         text_condition,
                         im,
                         empty_text_embed,
                         cfg.ldm_text_condition_cond_drop_prob,
-                    )
+                        )
                     cond_input['text'] = text_condition
 
             if cond_input is not None and 'image' in condition_types:
                 assert 'image' in cond_input, 'Conditioning type includes image but no image input found.'
                 validate_image_config(cfg.condition_config)
                 cond_input_image = cond_input['image'].to(
-                    device=device,
-                    dtype=torch.float32,
-                    non_blocking=True,
-                )
+                    device = device,
+                    dtype = torch.float32,
+                    non_blocking = True,
+                    )
                 cond_input['image'] = drop_image_condition(
                     cond_input_image,
                     im,
                     cfg.ldm_image_condition_cond_drop_prob,
-                )
+                    )
 
             noise = torch.randn_like(im)
-            t = torch.randint(0, cfg.diffusion_num_timesteps, (im.shape[0],), device=device)
+            t = torch.randint(0, cfg.diffusion_num_timesteps, (im.shape[0],), device = device)
             noisy_im = scheduler.add_noise(im, noise, t)
             with autocast(**autocast_kwargs):
-                noise_pred = model(noisy_im, t, cond_input=cond_input)
+                noise_pred = model(noisy_im, t, cond_input = cond_input)
                 loss = criterion(noise_pred, noise)
 
             if not torch.isfinite(loss):
                 if is_main_process:
                     logger.warning('Skipping step due to non-finite loss (NaN or Inf)')
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none = True)
                 continue
 
             loss_value = loss.item()
             if is_main_process:
                 epoch_losses.append(loss_value)
-                progress_bar.set_postfix(loss=f'{loss_value:.4f}')
+                progress_bar.set_postfix(loss = f'{loss_value:.4f}')
 
             loss_sum += loss_value
             num_batches += 1.0
@@ -366,7 +373,7 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
             if not torch.isfinite(grad_norm):
                 if is_main_process:
                     logger.warning('Skipping optimizer.step() due to non-finite gradients')
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.zero_grad(set_to_none = True)
                 scaler.update()
                 continue
 
@@ -375,28 +382,37 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
 
             with torch.no_grad():
                 for ema_param, param in zip(ema_model.parameters(), model_module.parameters()):
-                    ema_param.data.mul_(EMA_DECAY).add_(param.data, alpha=1 - EMA_DECAY)
+                    ema_param.data.mul_(EMA_DECAY).add_(param.data, alpha = 1 - EMA_DECAY)
 
         loss_stats = torch.tensor(
             [loss_sum, num_batches],
-            device=device,
-            dtype=torch.float64,
-        )
+            device = device,
+            dtype = torch.float64,
+            )
         if distributed:
-            dist.all_reduce(loss_stats, op=dist.ReduceOp.SUM)
+            dist.all_reduce(loss_stats, op = dist.ReduceOp.SUM)
         total_loss, total_batches = loss_stats.tolist()
         avg_loss = float(total_loss / max(total_batches, 1.0))
 
         lr_scheduler.step(avg_loss)
         current_lr = optimizer.param_groups[0]['lr']
+        epoch_duration = time.time() - epoch_start_time
         if is_main_process:
+            # 获取CPU内存占用（以GB为单位）
+            memory_info = psutil.virtual_memory()
+            memory_used_gb = memory_info.used / (1024 ** 3)
+            memory_percent = memory_info.percent
+
             logger.info(
-                'Epoch %d/%d | Loss: %.4f | LR: %.3e',
+                'Epoch %d/%d | Loss: %.4f | LR: %.3e | Time: %.2fmin | CPU Mem: %.2fGB (%.1f%%)',
                 epoch_idx + 1,
                 cfg.train_ldm_epochs,
                 avg_loss,
                 current_lr,
-            )
+                epoch_duration / 60,
+                memory_used_gb,
+                memory_percent,
+                )
             loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
             persist_loss_history(loss_history, run_artifacts['logs_dir'])
             plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
@@ -426,7 +442,7 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
                     latest_ckpt_path,
                     epoch_ckpt_path,
                     ema_latest_ckpt_path,
-                )
+                    )
 
     if is_main_process and run_artifacts is not None:
         logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
@@ -443,7 +459,7 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
     os.environ['WORLD_SIZE'] = str(world_size)
     os.environ['RANK'] = str(rank)
     os.environ['LOCAL_RANK'] = str(rank)
-    train(num_images=num_images, local_rank=rank, backend=backend)
+    train(num_images = num_images, local_rank = rank, backend = backend)
 
 
 if __name__ == '__main__':
@@ -458,9 +474,9 @@ if __name__ == '__main__':
         os.environ.setdefault('MASTER_PORT', '29500')
         mp.spawn(
             _distributed_worker,
-            args=(world_size, num_images, backend),
-            nprocs=world_size,
-            join=True,
-        )
+            args = (world_size, num_images, backend),
+            nprocs = world_size,
+            join = True,
+            )
     else:
-        train(num_images=num_images, local_rank=local_rank, backend=backend)
+        train(num_images = num_images, local_rank = local_rank, backend = backend)

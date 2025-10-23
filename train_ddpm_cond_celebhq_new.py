@@ -11,7 +11,8 @@ from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.amp import autocast, GradScaler
-
+import psutil
+import time
 from models.unet_cond_base import Unet
 
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
@@ -138,6 +139,7 @@ def train(num_images: int = None):
 
     # Run training
     for epoch_idx in range(num_epochs):
+        epoch_start_time = time.time()
         epoch_losses: List[float] = []
         progress_bar = tqdm(data_loader, desc = f'Epoch {epoch_idx + 1}/{num_epochs}', leave = False)
         for data in progress_bar:
@@ -213,16 +215,24 @@ def train(num_images: int = None):
             with torch.no_grad():
                 for ema_param, param in zip(ema_model.parameters(), model.parameters()):
                     ema_param.data = ema_param.data * 0.9999 + param.data * (1 - 0.9999)
+        memory_info = psutil.virtual_memory()
+        memory_used_gb = memory_info.used / (1024 ** 3)
+        memory_percent = memory_info.percent
+        epoch_duration = time.time() - epoch_start_time
 
         avg_loss = float(np.mean(epoch_losses)) if epoch_losses else 0.0
         lr_scheduler.step(avg_loss)
         current_lr = optimizer.param_groups[0]['lr']
+
         logger.info(
-            'Epoch %d/%d | Loss: %.4f | LR: %.3e',
+            'Epoch %d/%d | Loss: %.4f | LR: %.3e | Time: %.2fmin | CPU Mem: %.2fGB (%.1f%%)',
             epoch_idx + 1,
-            num_epochs,
+            cfg.train_ldm_epochs,
             avg_loss,
-            current_lr
+            current_lr,
+            epoch_duration / 60,
+            memory_used_gb,
+            memory_percent,
             )
 
         loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
