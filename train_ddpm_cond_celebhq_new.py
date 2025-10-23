@@ -174,7 +174,7 @@ def train(num_images: int = None):
         lr_scheduler.step(avg_loss)
         current_lr = optimizer.param_groups[0]['lr']
         logger.info(
-            'Epoch %d/%d | Loss: %.4f | LR: %.6f',
+            'Epoch %d/%d | Loss: %.4f | LR: %.3e',
             epoch_idx + 1,
             num_epochs,
             avg_loss,

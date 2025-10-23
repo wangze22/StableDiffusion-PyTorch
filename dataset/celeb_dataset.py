@@ -5,10 +5,11 @@ import torch
 import torch.nn.functional as F
 import torchvision
 import numpy as np
-from PIL import Image
 from utils.diffusion_utils import load_latents
 from tqdm import tqdm
 from torch.utils.data.dataset import Dataset
+from PIL import Image, UnidentifiedImageError, ImageFile
+ImageFile.LOAD_TRUNCATED_IMAGES = True  # 允许读取被截断的图像，减少 OSError
 
 
 class CelebDataset(Dataset):
@@ -116,31 +117,33 @@ class CelebDataset(Dataset):
         print('Found {} masks'.format(len(masks)))
         print('Found {} captions'.format(len(texts)))
         return ims, texts, masks
-    
+
     def get_mask(self, index):
         r"""
-        Method to get the mask of WxH
-        for given index and convert it into
-        Classes x W x H mask image
-        :param index:
-        :return:
+        Method to get the mask of WxH ...
         """
-        with Image.open(self.masks[index]) as mask_im:
-            mask_im = np.array(mask_im, dtype=np.int64)
-        mask_im = torch.from_numpy(mask_im)
-        mask_im = F.interpolate(
-            mask_im.unsqueeze(0).unsqueeze(0).float(),
-            size=(self.mask_h, self.mask_w),
-            mode='nearest',
-        ).squeeze().long()
-        mask_im = mask_im.clamp(0, self.mask_channels)
-        one_hot = F.one_hot(mask_im, num_classes=self.mask_channels + 1).movedim(-1, 0).float()
-        mask = one_hot[1:]  # discard background channel
-        return mask
-    
+        try:
+            with Image.open(self.masks[index]) as mask_im:
+                mask_im = np.array(mask_im, dtype = np.int64)
+            mask_im = torch.from_numpy(mask_im)
+            mask_im = F.interpolate(
+                mask_im.unsqueeze(0).unsqueeze(0).float(),
+                size = (self.mask_h, self.mask_w),
+                mode = 'nearest',
+                ).squeeze().long()
+            mask_im = mask_im.clamp(0, self.mask_channels)
+            one_hot = F.one_hot(mask_im, num_classes = self.mask_channels + 1).movedim(-1, 0).float()
+            mask = one_hot[1:]  # discard background channel
+            return mask
+        except (OSError, UnidentifiedImageError) as e:
+            # 遇到坏的/不可读的 mask，返回全零（相当于只有背景），并给出轻量提示
+            print(f"Warning: Skipping corrupted mask at {self.masks[index]} ({e})")
+            return torch.zeros(self.mask_channels, self.mask_h, self.mask_w, dtype = torch.float32)
+
     def __len__(self):
         return len(self.images)
     
+
     def __getitem__(self, index):
         ######## Set Conditioning Info ########
         cond_inputs = {}
@@ -151,7 +154,7 @@ class CelebDataset(Dataset):
             mask = self.get_mask(index)
             cond_inputs['image'] = mask
         #######################################
-        
+
         if self.use_latents:
             latent = self.latent_maps[self.images[index]]
             if len(self.condition_types) == 0:
@@ -159,10 +162,20 @@ class CelebDataset(Dataset):
             else:
                 return latent, cond_inputs
         else:
-            im = Image.open(self.images[index])
-            im_tensor = self.image_transform(im)
-            im.close()
-        
+            # 最多尝试 10 次重采样，避免坏图中断
+            for _ in range(10):
+                try:
+                    with Image.open(self.images[index]) as im:
+                        im_tensor = self.image_transform(im)
+                    break
+                except (OSError, UnidentifiedImageError) as e:
+                    print(f"Warning: corrupted image {self.images[index]} ({e}); resampling...")
+                    index = random.randint(0, len(self.images) - 1)
+            else:
+                # 多次失败后返回占位零图像
+                print("Error: too many corrupted images encountered; returning zero image.")
+                im_tensor = torch.zeros(self.im_channels, self.im_size, self.im_size, dtype=torch.float32)
+
             # Convert input to -1 to 1 range.
             im_tensor = (2 * im_tensor) - 1
             if len(self.condition_types) == 0:

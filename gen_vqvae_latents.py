@@ -80,8 +80,8 @@ def infer(task_name, num_samples, num_grid_rows, vqvae_checkpoint_name, save_lat
         if save_latents:
             # save Latents (but in a very unoptimized way)
             latent_path = latent_dir_name
-            latent_fnames = glob.glob(os.path.join(task_name, latent_dir_name, '*.pkl'))
-            assert len(latent_fnames) == 0, 'Latents already present. Delete all latent files and re-run'
+            # latent_fnames = glob.glob(os.path.join(latent_dir_name, '*.pkl'))
+            # assert len(latent_fnames) == 0, 'Latents already present. Delete all latent files and re-run'
             if not os.path.exists(latent_path):
                 os.mkdir(latent_path)
             print('Saving Latents for {}'.format(dataset_config['name']))
