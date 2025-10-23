@@ -1,7 +1,7 @@
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -40,6 +40,48 @@ os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 EMA_DECAY = 0.9999
 DEFAULT_BACKEND = 'gloo' if os.name == 'nt' else 'nccl'
 use_amp = True
+
+try:
+    mp.set_sharing_strategy('file_system')
+except (RuntimeError, AttributeError):
+    # Fallback when the sharing strategy is not supported on the platform.
+    pass
+
+DEFAULT_DATALOADER_WORKERS = int(os.environ.get('TRAIN_DATALOADER_WORKERS', '4'))
+print(f'DEFAULT_DATALOADER_WORKERS: {DEFAULT_DATALOADER_WORKERS}')
+DEFAULT_PREFETCH_FACTOR = int(os.environ.get('TRAIN_DATALOADER_PREFETCH', '2'))
+_FD_PER_WORKER_ESTIMATE = 4
+_FD_RESERVE = 32
+
+
+def _resolve_dataloader_workers(desired_workers: int, world_size: int) -> Tuple[int, Optional[int]]:
+    """Pick a dataloader worker count that respects CPU and file descriptor limits."""
+    env_override = os.environ.get('TRAIN_DATALOADER_WORKERS')
+    if env_override is not None:
+        try:
+            return max(0, int(env_override)), None
+        except ValueError:
+            pass
+
+    cpu_count = os.cpu_count() or 1
+    base_workers = max(1, cpu_count // max(world_size, 1))
+    workers = min(desired_workers, base_workers)
+
+    soft_limit: Optional[int] = None
+    try:
+        import resource  # type: ignore
+
+        soft_limit, _ = resource.getrlimit(resource.RLIMIT_NOFILE)
+    except (ImportError, AttributeError, ValueError):
+        soft_limit = None
+
+    if soft_limit is not None and soft_limit > 0:
+        available = max(soft_limit - _FD_RESERVE, _FD_PER_WORKER_ESTIMATE)
+        max_total_workers = max(1, available // _FD_PER_WORKER_ESTIMATE)
+        max_per_process = max_total_workers // max(world_size, 1)
+        workers = min(workers, max_per_process)
+
+    return max(workers, 0), soft_limit
 
 def _init_distributed_if_needed(local_rank: int, backend: str) -> bool:
     """Initialise a distributed process group when local_rank is provided."""
@@ -137,25 +179,39 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
             drop_last=False,
         )
 
-    data_loader = DataLoader(
-        im_dataset,
+    world_size = dist.get_world_size() if distributed else 1
+    num_workers, soft_limit = _resolve_dataloader_workers(DEFAULT_DATALOADER_WORKERS, world_size)
+    print(f'num_workers: {num_workers}')
+    print(f'soft_limit: {soft_limit}')
+    prefetch_factor = max(1, DEFAULT_PREFETCH_FACTOR)
+
+    if is_main_process:
+        logger.info(
+            'Dataloader workers per process: %d | world_size=%d | RLIMIT_NOFILE=%s',
+            num_workers,
+            world_size,
+            str(soft_limit) if soft_limit is not None else 'unknown',
+        )
+        if num_workers == 0:
+            logger.warning(
+                'Falling back to single-process data loading to stay within file descriptor limits.'
+            )
+
+    dataloader_kwargs = dict(
         batch_size=cfg.train_ldm_batch_size,
         shuffle=sampler is None,
         sampler=sampler,
-        pin_memory=device.type == 'cuda',
+        pin_memory=(device.type == 'cuda'),
+        num_workers=num_workers,
+        persistent_workers=num_workers > 0,
     )
+    if num_workers > 0:
+        dataloader_kwargs.update(
+            prefetch_factor=prefetch_factor,
+            multiprocessing_context=mp.get_context('spawn'),
+        )
 
-    # data_loader = DataLoader(
-    #     im_dataset,
-    #     batch_size = cfg.train_ldm_batch_size,  # 每卡 batch（保持不变）
-    #     shuffle = sampler is None,
-    #     sampler = sampler,
-    #     pin_memory = (device.type == 'cuda'),
-    #     num_workers = 4,  # 先用 4/卡，确认能跑
-    #     prefetch_factor = 2,  # 小一点，先稳
-    #     persistent_workers = True,
-    #     multiprocessing_context = mp.get_context("spawn"),
-    #     )
+    data_loader = DataLoader(im_dataset, **dataloader_kwargs)
 
     model = Unet(
         im_channels=cfg.autoencoder_z_channels,
