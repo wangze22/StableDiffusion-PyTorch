@@ -17,7 +17,7 @@ from torchvision.utils import make_grid
 
 from models.unet_cond_base import Unet
 from models.vqvae import VQVAE
-from scheduler.linear_noise_scheduler import LinearNoiseScheduler
+from scheduler.linear_noise_scheduler import LinearNoiseScheduler, DDIMSampler
 from utils.text_utils import get_tokenizer_and_model, get_text_representation
 from dataset.celeb_dataset import CelebDataset
 
@@ -91,7 +91,6 @@ def class_map_from_one_hot(mask_tensor: torch.Tensor) -> np.ndarray:
 
 def sample_with_mask_and_prompt(
         model: Unet,
-        scheduler: LinearNoiseScheduler,
         vae: VQVAE,
         text_tokenizer,
         text_model,
@@ -100,6 +99,13 @@ def sample_with_mask_and_prompt(
         cf_guidance_scale: float = 1.0,
         num_inference_steps = 100,
         ) -> Image.Image:
+
+    sampler = DDIMSampler(
+        beta = (cfg.diffusion_beta_start, cfg.diffusion_beta_end),
+        model = model,
+        T = cfg.diffusion_num_timesteps,
+        )
+
     """
     Run DDPM sampling using provided mask (1xCxHxW) and prompt text, return final decoded PIL image.
     """
@@ -118,26 +124,14 @@ def sample_with_mask_and_prompt(
     # Prepare cond inputs
     cond_input = {'text': text_prompt_embed, 'image': mask_oh.to(device)}
     uncond_input = {'text': empty_text_embed, 'image': torch.zeros_like(mask_oh).to(device)}
+    num_inference_steps = max(2, min(num_inference_steps, cfg.diffusion_num_timesteps - 1))
 
     T_list = torch.linspace(cfg.diffusion_num_timesteps - 1, 0, num_inference_steps, dtype = torch.long)
     assert T_list[-1] == 0, 'Last timestep must be zero.'
     # Sampling loop
     with torch.no_grad():
         # for i in reversed(range(cfg.diffusion_num_timesteps)):
-        for i in T_list:
-            t = (torch.ones((xt.shape[0],), device = device) * i).long()
-            noise_pred_cond = model(xt, t, cond_input)
-            if cf_guidance_scale > 1:
-                noise_pred_uncond = model(xt, t, uncond_input)
-                noise_pred = noise_pred_uncond + cf_guidance_scale * (noise_pred_cond - noise_pred_uncond)
-            else:
-                noise_pred = noise_pred_cond
-            xt, x0_pred = scheduler.sample_prev_timestep(xt,
-                                                         noise_pred,
-                                                         torch.as_tensor(i, device = device),
-                                                         num_inference_steps
-                                                         )
-
+        xt = sampler(xt, cond_input, uncond_input, steps = num_inference_steps)
         # Decode final latent
         ims = vae.decode(xt)
         ims = torch.clamp(ims, -1., 1.).detach().cpu()
@@ -153,7 +147,6 @@ def sample_with_mask_and_prompt(
 class ModelBundle:
     model: Unet
     vae: VQVAE
-    scheduler: LinearNoiseScheduler
     text_tokenizer: Any
     text_model: Any
 
@@ -198,15 +191,8 @@ def load_models_and_configs(
         raise FileNotFoundError(f'VAE checkpoint not found: {vqvae_ckpt_path}')
     vae.load_state_dict(torch.load(str(vqvae_ckpt_path), map_location = device))
 
-    # Scheduler
-    scheduler = LinearNoiseScheduler(
-        num_timesteps = cfg.diffusion_num_timesteps,
-        beta_start = cfg.diffusion_beta_start,
-        beta_end = cfg.diffusion_beta_end,
-        )
-
     return ModelBundle(
-        model = model, vae = vae, scheduler = scheduler,
+        model = model, vae = vae,
         text_tokenizer = text_tokenizer, text_model = text_model,
         )
 
@@ -724,7 +710,6 @@ class MaskPainterGUI:
             mask_oh = one_hot_from_class_map(class_map_copy, self.num_classes).unsqueeze(0).to(device)
             img = sample_with_mask_and_prompt(
                 model = self.bundle.model,
-                scheduler = self.bundle.scheduler,
                 vae = self.bundle.vae,
                 text_tokenizer = self.bundle.text_tokenizer,
                 text_model = self.bundle.text_model,
