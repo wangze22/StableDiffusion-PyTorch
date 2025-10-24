@@ -421,24 +421,24 @@ def train(num_images: Optional[int] = None, local_rank: int = -1, backend: Optio
             plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
 
             should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == cfg.train_ldm_epochs)
+            checkpoints_dir = run_artifacts['checkpoints_dir']
+            state_dict = model_module.state_dict()
+            ema_state_dict = ema_model.state_dict()
+            latest_ckpt_path = run_artifacts['run_dir'] / cfg.model_paths_ldm_ckpt_name
+            torch.save(state_dict, latest_ckpt_path)
+            ema_latest_ckpt_path = run_artifacts['run_dir'] / f'ema_{cfg.model_paths_ldm_ckpt_name}'
+            torch.save(ema_state_dict, ema_latest_ckpt_path)
+
             if should_save:
-                state_dict = model_module.state_dict()
-                ema_state_dict = ema_model.state_dict()
-                checkpoints_dir = run_artifacts['checkpoints_dir']
-
-                latest_ckpt_path = run_artifacts['run_dir'] / cfg.model_paths_ldm_ckpt_name
                 epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{cfg.model_paths_ldm_ckpt_name}'
-                legacy_ckpt_path = legacy_ckpt_dir / cfg.model_paths_ldm_ckpt_name
-                torch.save(state_dict, latest_ckpt_path)
+                # legacy_ckpt_path = legacy_ckpt_dir / cfg.model_paths_ldm_ckpt_name
                 torch.save(state_dict, epoch_ckpt_path)
-                torch.save(state_dict, legacy_ckpt_path)
+                # torch.save(state_dict, legacy_ckpt_path)
 
-                ema_latest_ckpt_path = run_artifacts['run_dir'] / f'ema_{cfg.model_paths_ldm_ckpt_name}'
                 ema_epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_ema_{cfg.model_paths_ldm_ckpt_name}'
-                ema_legacy_ckpt_path = legacy_ckpt_dir / f'ema_{cfg.model_paths_ldm_ckpt_name}'
-                torch.save(ema_state_dict, ema_latest_ckpt_path)
+                # ema_legacy_ckpt_path = legacy_ckpt_dir / f'ema_{cfg.model_paths_ldm_ckpt_name}'
                 torch.save(ema_state_dict, ema_epoch_ckpt_path)
-                torch.save(ema_state_dict, ema_legacy_ckpt_path)
+                # torch.save(ema_state_dict, ema_legacy_ckpt_path)
 
                 logger.info(
                     'Saved checkpoints: latest=%s | epoch=%s | ema_latest=%s',
