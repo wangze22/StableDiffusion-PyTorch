@@ -97,7 +97,9 @@ def sample_with_mask_and_prompt(
         mask_oh: torch.Tensor,
         prompt_text: str,
         cf_guidance_scale: float = 1.0,
-        num_inference_steps = 100,
+        num_inference_steps: int = 100,
+        method: str = 'quadratic',
+        eta: float = 0.0,
         ) -> Image.Image:
 
     sampler = DDIMSampler(
@@ -130,8 +132,14 @@ def sample_with_mask_and_prompt(
     assert T_list[-1] == 0, 'Last timestep must be zero.'
     # Sampling loop
     with torch.no_grad():
-        # for i in reversed(range(cfg.diffusion_num_timesteps)):
-        xt = sampler(xt, cond_input, uncond_input, steps = num_inference_steps)
+        xt = sampler.forward(
+            xt,
+            cond_input,
+            uncond_input,
+            steps=num_inference_steps,
+            method=method,
+            eta=eta,
+        )
         # Decode final latent
         ims = vae.decode(xt)
         ims = torch.clamp(ims, -1., 1.).detach().cpu()
@@ -272,18 +280,28 @@ class MaskPainterGUI:
         self.prompt_entry = tk.Entry(self.left_frame, textvariable = self.prompt_var, width = 60)
         self.prompt_entry.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
 
-        # Third row: cf_guidance_scale and num_inference_steps input
+        # Third row: cf_guidance_scale, num_inference_steps, method, eta inputs
         cf_frame = tk.Frame(self.left_frame)
         cf_frame.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
         tk.Label(cf_frame, text = 'CF Guidance Scale:').pack(side = tk.LEFT, padx = 2)
         self.cf_guidance_scale_var = tk.DoubleVar(value = 1.0)
-        self.cf_guidance_scale_entry = tk.Entry(cf_frame, textvariable = self.cf_guidance_scale_var, width = 10)
+        self.cf_guidance_scale_entry = tk.Entry(cf_frame, textvariable = self.cf_guidance_scale_var, width = 8)
         self.cf_guidance_scale_entry.pack(side = tk.LEFT, padx = 2)
 
-        tk.Label(cf_frame, text = 'Sampling Steps:').pack(side = tk.LEFT, padx = (10, 2))
+        tk.Label(cf_frame, text = 'Steps:').pack(side = tk.LEFT, padx = (10, 2))
         self.num_inference_steps_var = tk.IntVar(value = cfg.diffusion_num_timesteps)
-        self.num_inference_steps_entry = tk.Entry(cf_frame, textvariable = self.num_inference_steps_var, width = 10)
+        self.num_inference_steps_entry = tk.Entry(cf_frame, textvariable = self.num_inference_steps_var, width = 6)
         self.num_inference_steps_entry.pack(side = tk.LEFT, padx = 2)
+
+        tk.Label(cf_frame, text = 'Method:').pack(side = tk.LEFT, padx = (10, 2))
+        self.method_var = tk.StringVar(value = 'quadratic')
+        self.method_menu = tk.OptionMenu(cf_frame, self.method_var, 'linear', 'quadratic')
+        self.method_menu.pack(side = tk.LEFT, padx = 2)
+
+        tk.Label(cf_frame, text = 'Eta:').pack(side = tk.LEFT, padx = (10, 2))
+        self.eta_var = tk.DoubleVar(value = 0.0)
+        self.eta_entry = tk.Entry(cf_frame, textvariable = self.eta_var, width = 6)
+        self.eta_entry.pack(side = tk.LEFT, padx = 2)
 
         # Prepare variables for brush preview and label (preview will be created next to palette in the fourth row)
         self.brush_info_var = tk.StringVar()
@@ -717,6 +735,8 @@ class MaskPainterGUI:
                 prompt_text = prompt_text or '',
                 cf_guidance_scale = cf_scale,
                 num_inference_steps = num_steps,
+                method = self.method_var.get(),
+                eta = float(self.eta_var.get()),
                 )
             self.generated_img = img
             self.image_panel.after(0, lambda: self._set_right_panel_image(self.generated_img))
