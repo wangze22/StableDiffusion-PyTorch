@@ -102,10 +102,9 @@ def sample_with_mask_and_prompt(
     num_inference_steps: int = None,
 ) -> Image.Image:
     """
-    DDIM subsampling (eta=0) version.
-    只改采样时间索引与更新公式，其他保持一致：
-    - 单次前向的 CFG（batch concat）
-    - VAE 解码与返回 PIL.Image
+    Hybrid sampler:
+    - S == T: use original DDPM single-step posterior (your scheduler.sample_prev_timestep) to match old quality.
+    - S <  T: use DDIM (eta=0) with robust timestep mapping (float linspace -> round -> unique) to avoid duplicates.
     """
     import torchvision
     from torchvision.utils import make_grid
@@ -113,83 +112,109 @@ def sample_with_mask_and_prompt(
 
     device = next(model.parameters()).device
 
-    # 步数默认仍用配置里的训练总步数（保持与你原来一致的默认行为）
     if num_inference_steps is None:
-        num_inference_steps = cfg.diffusion_num_timesteps  # :contentReference[oaicite:2]{index=2}
+        num_inference_steps = cfg.diffusion_num_timesteps
 
-    # 计算 latent 尺寸（保持你的写法）
+    # latent size as before
     im_size = cfg.dataset_im_size // 2 ** sum(cfg.autoencoder_down_sample)
 
-    # 随机初始 latent（对应 t = T-1 的标准高斯）
+    # start from standard normal at t = T-1
     xt = torch.randn((1, cfg.autoencoder_z_channels, im_size, im_size), device=device)
 
-    # 文本嵌入（保持你的写法）
+    # text embeds (same as yours)
     text_prompt = [prompt_text]
     empty_prompt = ['']
     with torch.no_grad():
         text_prompt_embed = get_text_representation(text_prompt, text_tokenizer, text_model, device)
         empty_text_embed  = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
 
-    # 条件输入（保持你的写法）
+    # cond inputs (same as yours)
     mask_oh = mask_oh.to(device)
     cond_input   = {'text': text_prompt_embed, 'image': mask_oh}
     uncond_input = {'text': empty_text_embed,  'image': torch.zeros_like(mask_oh, device=device)}
 
-    # ---- 关键改动：时间子采样 + DDIM(eta=0) 跨步更新 ----
-    T = scheduler.num_timesteps  # 训练/构表时的总步数（如 1000）
-    # 从 T-1 到 0 等间隔选 S 个 t；S = num_inference_steps
-    timesteps = torch.linspace(T - 1, 0, num_inference_steps, dtype=torch.long, device=device)
-    print(f'num_inference_steps: {num_inference_steps}')
-    print(f'timesteps: {timesteps}')
-    # 取出需要的 alpha_bar（累计乘积）与其根号，避免重复计算
-    a_bar      = scheduler.alpha_cum_prod.to(device)                     # shape: [T]
-    sqrt_ab    = scheduler.sqrt_alpha_cum_prod.to(device)                # shape: [T]
-    sqrt_1mab  = scheduler.sqrt_one_minus_alpha_cum_prod.to(device)      # shape: [T]
+    T = int(scheduler.num_timesteps)
+    S = int(num_inference_steps)
+    s = 1.0 if (cf_guidance_scale is None) else float(cf_guidance_scale)
+    print(f'num_timesteps = {T}')
+    print(f'num_inference_steps = {S}')
+    # ---------- build timesteps robustly ----------
+    if S >= T:
+        # full chain: exact descending  T-1, ..., 0
+        timesteps = torch.arange(T - 1, -1, -1, device=device, dtype=torch.long)
+    else:
+        # subsample with float linspace -> round -> unique to avoid duplicates
+        ts = torch.linspace(T - 1, 0, S, device=device, dtype=torch.float32)
+        timesteps = torch.round(ts).to(torch.long)
+        # ensure strictly non-increasing without duplicates
+        timesteps = torch.unique_consecutive(timesteps)
+        # force endpoints
+        if timesteps[0].item() != T - 1:
+            timesteps[0] = T - 1
+        if timesteps[-1].item() != 0:
+            timesteps = torch.cat([timesteps, torch.zeros(1, device=device, dtype=torch.long)], dim=0)
 
-    s = 1.0 if cf_guidance_scale is None else float(cf_guidance_scale)
+    # cache schedule tensors
+    a_bar     = scheduler.alpha_cum_prod.to(device)                # [T]
+    sqrt_ab   = scheduler.sqrt_alpha_cum_prod.to(device)           # [T]
+    sqrt_1mab = scheduler.sqrt_one_minus_alpha_cum_prod.to(device) # [T]
 
     model.eval()
     with torch.no_grad():
-        # 逐段做 t_cur -> t_next（注意是“跨步”，而不是固定 t-1）
-        for idx in range(len(timesteps) - 1):
-            t_cur  = timesteps[idx]       # e.g., 999, 979, ...
-            t_next = timesteps[idx + 1]   # 更小的时间索引，最终到 0
+        if len(timesteps) == T:
+            # ===== DDPM: step-by-step posterior (matches your previous behavior) =====
+            for i in range(T - 1, -1, -1):
+                t_b = torch.full((xt.shape[0],), i, device=device, dtype=torch.long)
 
-            # 准备 batch 的时间张量（你的模型接口需要 (B,) 的 long）
-            t_b = t_cur.expand(xt.shape[0])
+                if s == 1.0:
+                    eps = model(xt, t_b, cond_input)
+                elif s == 0.0:
+                    eps = model(xt, t_b, uncond_input)
+                else:
+                    xt_cat = torch.cat([xt, xt], dim=0)
+                    t_cat  = torch.cat([t_b, t_b], dim=0)
+                    cond_cat = {
+                        'text':  torch.cat([uncond_input['text'],  cond_input['text']],  dim=0),
+                        'image': torch.cat([uncond_input['image'], cond_input['image']], dim=0),
+                    }
+                    eps_cat = model(xt_cat, t_cat, cond_cat)
+                    eps_uncond, eps_cond = torch.chunk(eps_cat, 2, dim=0)
+                    eps = eps_uncond + s * (eps_cond - eps_uncond)
 
-            # ------- 单次前向的 CFG（沿用你原来的拼批写法） -------
-            if s == 1.0:
-                # 纯条件
-                eps = model(xt, t_b, cond_input)
-            elif s == 0.0:
-                # 纯无条件
-                eps = model(xt, t_b, uncond_input)
-            else:
-                # 拼批：uncond/cond 一起过一次
-                xt_cat = torch.cat([xt, xt], dim=0)
-                t_cat  = torch.cat([t_b, t_b], dim=0)
-                cond_cat = {
-                    'text':  torch.cat([uncond_input['text'],  cond_input['text']],  dim=0),
-                    'image': torch.cat([uncond_input['image'], cond_input['image']], dim=0),
-                }
-                eps_cat = model(xt_cat, t_cat, cond_cat)
-                eps_uncond, eps_cond = torch.chunk(eps_cat, 2, dim=0)
-                eps = eps_uncond + s * (eps_cond - eps_uncond)
-            # -----------------------------------------------------
+                # use your scheduler posterior (keeps stochasticity & quality)
+                xt, _ = scheduler.sample_prev_timestep(xt, eps, torch.as_tensor(i, device=device))
+        else:
+            # ===== DDIM (eta=0): multi-step skipping =====
+            for idx in range(len(timesteps) - 1):
+                t_cur  = timesteps[idx]
+                t_next = timesteps[idx + 1]
+                t_b = t_cur.expand(xt.shape[0])
 
-            # 估计 x0（标准公式）
-            # x0 = (x_t - sqrt(1 - a_bar[t]) * eps) / sqrt(a_bar[t])
-            xb = (xt - sqrt_1mab[t_cur] * eps) / (sqrt_ab[t_cur] + 1e-8)
-            xb = xb.clamp(-1., 1.)
+                if s == 1.0:
+                    eps = model(xt, t_b, cond_input)
+                elif s == 0.0:
+                    eps = model(xt, t_b, uncond_input)
+                else:
+                    xt_cat = torch.cat([xt, xt], dim=0)
+                    t_cat  = torch.cat([t_b, t_b], dim=0)
+                    cond_cat = {
+                        'text':  torch.cat([uncond_input['text'],  cond_input['text']],  dim=0),
+                        'image': torch.cat([uncond_input['image'], cond_input['image']], dim=0),
+                    }
+                    eps_cat = model(xt_cat, t_cat, cond_cat)
+                    eps_uncond, eps_cond = torch.chunk(eps_cat, 2, dim=0)
+                    eps = eps_uncond + s * (eps_cond - eps_uncond)
 
-            # DDIM(eta=0) 跨步更新（确定性）：x_{t_next} = sqrt(a_bar[t_next]) * x0 + sqrt(1 - a_bar[t_next]) * eps_hat
-            # 其中 eps_hat 用当前 t 的重构定义（保持一致的预测残差）
-            eps_hat = (xt - sqrt_ab[t_cur] * xb) / (sqrt_1mab[t_cur] + 1e-8)
+                # x0 estimate
+                x0 = (xt - sqrt_1mab[t_cur] * eps) / (sqrt_ab[t_cur] + 1e-8)
+                x0 = x0.clamp(-1., 1.)  # keep same clipping behavior
 
-            xt = sqrt_ab[t_next] * xb + sqrt_1mab[t_next] * eps_hat
+                # deterministic DDIM update (eta=0):
+                # eps_hat is consistent residual at t_cur
+                eps_hat = (xt - sqrt_ab[t_cur] * x0) / (sqrt_1mab[t_cur] + 1e-8)
+                xt = sqrt_ab[t_next] * x0 + sqrt_1mab[t_next] * eps_hat
 
-        # 解码最终 latent（保持你的写法）
+        # decode as before
         ims = vae.decode(xt)
         ims = torch.clamp(ims, -1., 1.).detach().cpu()
         ims = (ims + 1) / 2
