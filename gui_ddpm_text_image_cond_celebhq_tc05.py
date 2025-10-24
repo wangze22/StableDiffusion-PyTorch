@@ -98,40 +98,98 @@ def sample_with_mask_and_prompt(
     text_model,
     mask_oh: torch.Tensor,
     prompt_text: str,
-    cf_guidance_scale: float = 1.0,
+    cf_guidance_scale: float = 2,
+    num_inference_steps: int = None,
 ) -> Image.Image:
     """
-    Run DDPM sampling using provided mask (1xCxHxW) and prompt text, return final decoded PIL image.
+    DDIM subsampling (eta=0) version.
+    只改采样时间索引与更新公式，其他保持一致：
+    - 单次前向的 CFG（batch concat）
+    - VAE 解码与返回 PIL.Image
     """
+    import torchvision
+    from torchvision.utils import make_grid
+    from PIL import Image
+
+    device = next(model.parameters()).device
+
+    # 步数默认仍用配置里的训练总步数（保持与你原来一致的默认行为）
+    if num_inference_steps is None:
+        num_inference_steps = cfg.diffusion_num_timesteps  # :contentReference[oaicite:2]{index=2}
+
+    # 计算 latent 尺寸（保持你的写法）
     im_size = cfg.dataset_im_size // 2 ** sum(cfg.autoencoder_down_sample)
 
-    # Random latent
+    # 随机初始 latent（对应 t = T-1 的标准高斯）
     xt = torch.randn((1, cfg.autoencoder_z_channels, im_size, im_size), device=device)
 
-    # Text embeddings
+    # 文本嵌入（保持你的写法）
     text_prompt = [prompt_text]
     empty_prompt = ['']
     with torch.no_grad():
         text_prompt_embed = get_text_representation(text_prompt, text_tokenizer, text_model, device)
-        empty_text_embed = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
+        empty_text_embed  = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
 
-    # Prepare cond inputs
-    cond_input = {'text': text_prompt_embed, 'image': mask_oh.to(device)}
-    uncond_input = {'text': empty_text_embed, 'image': torch.zeros_like(mask_oh).to(device)}
+    # 条件输入（保持你的写法）
+    mask_oh = mask_oh.to(device)
+    cond_input   = {'text': text_prompt_embed, 'image': mask_oh}
+    uncond_input = {'text': empty_text_embed,  'image': torch.zeros_like(mask_oh, device=device)}
 
-    # Sampling loop
+    # ---- 关键改动：时间子采样 + DDIM(eta=0) 跨步更新 ----
+    T = scheduler.num_timesteps  # 训练/构表时的总步数（如 1000）
+    # 从 T-1 到 0 等间隔选 S 个 t；S = num_inference_steps
+    timesteps = torch.linspace(T - 1, 0, num_inference_steps, dtype=torch.long, device=device)
+    print(f'num_inference_steps: {num_inference_steps}')
+    print(f'timesteps: {timesteps}')
+    # 取出需要的 alpha_bar（累计乘积）与其根号，避免重复计算
+    a_bar      = scheduler.alpha_cum_prod.to(device)                     # shape: [T]
+    sqrt_ab    = scheduler.sqrt_alpha_cum_prod.to(device)                # shape: [T]
+    sqrt_1mab  = scheduler.sqrt_one_minus_alpha_cum_prod.to(device)      # shape: [T]
+
+    s = 1.0 if cf_guidance_scale is None else float(cf_guidance_scale)
+
+    model.eval()
     with torch.no_grad():
-        for i in reversed(range(cfg.diffusion_num_timesteps)):
-            t = (torch.ones((xt.shape[0],), device=device) * i).long()
-            noise_pred_cond = model(xt, t, cond_input)
-            if cf_guidance_scale > 1:
-                noise_pred_uncond = model(xt, t, uncond_input)
-                noise_pred = noise_pred_uncond + cf_guidance_scale * (noise_pred_cond - noise_pred_uncond)
-            else:
-                noise_pred = noise_pred_cond
-            xt, x0_pred = scheduler.sample_prev_timestep(xt, noise_pred, torch.as_tensor(i, device=device))
+        # 逐段做 t_cur -> t_next（注意是“跨步”，而不是固定 t-1）
+        for idx in range(len(timesteps) - 1):
+            t_cur  = timesteps[idx]       # e.g., 999, 979, ...
+            t_next = timesteps[idx + 1]   # 更小的时间索引，最终到 0
 
-        # Decode final latent
+            # 准备 batch 的时间张量（你的模型接口需要 (B,) 的 long）
+            t_b = t_cur.expand(xt.shape[0])
+
+            # ------- 单次前向的 CFG（沿用你原来的拼批写法） -------
+            if s == 1.0:
+                # 纯条件
+                eps = model(xt, t_b, cond_input)
+            elif s == 0.0:
+                # 纯无条件
+                eps = model(xt, t_b, uncond_input)
+            else:
+                # 拼批：uncond/cond 一起过一次
+                xt_cat = torch.cat([xt, xt], dim=0)
+                t_cat  = torch.cat([t_b, t_b], dim=0)
+                cond_cat = {
+                    'text':  torch.cat([uncond_input['text'],  cond_input['text']],  dim=0),
+                    'image': torch.cat([uncond_input['image'], cond_input['image']], dim=0),
+                }
+                eps_cat = model(xt_cat, t_cat, cond_cat)
+                eps_uncond, eps_cond = torch.chunk(eps_cat, 2, dim=0)
+                eps = eps_uncond + s * (eps_cond - eps_uncond)
+            # -----------------------------------------------------
+
+            # 估计 x0（标准公式）
+            # x0 = (x_t - sqrt(1 - a_bar[t]) * eps) / sqrt(a_bar[t])
+            xb = (xt - sqrt_1mab[t_cur] * eps) / (sqrt_ab[t_cur] + 1e-8)
+            xb = xb.clamp(-1., 1.)
+
+            # DDIM(eta=0) 跨步更新（确定性）：x_{t_next} = sqrt(a_bar[t_next]) * x0 + sqrt(1 - a_bar[t_next]) * eps_hat
+            # 其中 eps_hat 用当前 t 的重构定义（保持一致的预测残差）
+            eps_hat = (xt - sqrt_ab[t_cur] * xb) / (sqrt_1mab[t_cur] + 1e-8)
+
+            xt = sqrt_ab[t_next] * xb + sqrt_1mab[t_next] * eps_hat
+
+        # 解码最终 latent（保持你的写法）
         ims = vae.decode(xt)
         ims = torch.clamp(ims, -1., 1.).detach().cpu()
         ims = (ims + 1) / 2
@@ -274,6 +332,19 @@ class MaskPainterGUI:
         self.prompt_var = tk.StringVar()
         self.prompt_entry = tk.Entry(self.left_frame, textvariable=self.prompt_var, width=60)
         self.prompt_entry.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+
+        # Third row: cf_guidance_scale and num_inference_steps input
+        cf_frame = tk.Frame(self.left_frame)
+        cf_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+        tk.Label(cf_frame, text='CF Guidance Scale:').pack(side=tk.LEFT, padx=2)
+        self.cf_guidance_scale_var = tk.DoubleVar(value=1.0)
+        self.cf_guidance_scale_entry = tk.Entry(cf_frame, textvariable=self.cf_guidance_scale_var, width=10)
+        self.cf_guidance_scale_entry.pack(side=tk.LEFT, padx=2)
+
+        tk.Label(cf_frame, text='Sampling Steps:').pack(side=tk.LEFT, padx=(10, 2))
+        self.num_inference_steps_var = tk.IntVar(value=cfg.diffusion_num_timesteps)
+        self.num_inference_steps_entry = tk.Entry(cf_frame, textvariable=self.num_inference_steps_var, width=10)
+        self.num_inference_steps_entry.pack(side=tk.LEFT, padx=2)
 
         # Prepare variables for brush preview and label (preview will be created next to palette in the fourth row)
         self.brush_info_var = tk.StringVar()
@@ -695,6 +766,8 @@ class MaskPainterGUI:
 
         def worker():
             try:
+                cf_scale = self.cf_guidance_scale_var.get()
+                num_steps = self.num_inference_steps_var.get()
                 mask_oh = one_hot_from_class_map(class_map_copy, self.num_classes).unsqueeze(0).to(device)
                 img = sample_with_mask_and_prompt(
                     model=self.bundle.model,
@@ -704,7 +777,8 @@ class MaskPainterGUI:
                     text_model=self.bundle.text_model,
                     mask_oh=mask_oh,
                     prompt_text=prompt_text or '',
-                    cf_guidance_scale=1.0,
+                    cf_guidance_scale=cf_scale,
+                    num_inference_steps=num_steps,
                 )
                 self.generated_img = img
                 self.image_panel.after(0, lambda: self._set_right_panel_image(self.generated_img))
