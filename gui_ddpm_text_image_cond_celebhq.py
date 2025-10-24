@@ -288,7 +288,7 @@ def sample_with_mask_and_prompt(
                 noise_pred = noise_pred_uncond + cf_guidance_scale * (noise_pred_cond - noise_pred_uncond)
             else:
                 noise_pred = noise_pred_cond
-            xt, x0_pred = scheduler.sample_prev_timestep(xt, noise_pred, torch.as_tensor(i, device=device))
+            xt, _ = scheduler.sample_prev_timestep(xt, noise_pred, torch.as_tensor(i, device=device))
 
         # Decode final latent
         ims = vae.decode(xt)

@@ -25,32 +25,31 @@ import config.celebhq_text_image_cond_tc05 as cfg
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-
 # ------------- Labels and palette -------------
 label_list: List[str] = ['skin', 'nose', 'eye_g', 'l_eye', 'r_eye', 'l_brow', 'r_brow', 'l_ear', 'r_ear', 'mouth', 'u_lip', 'l_lip', 'hair', 'hat', 'ear_r', 'neck_l', 'neck', 'cloth']
 
 # Background id 0 is black; class ids 1..18 will use the following distinct colors
 palette: List[Tuple[int, int, int]] = [
-    (0, 0, 0),        # background 0
+    (0, 0, 0),  # background 0
     (255, 205, 148),  # skin
-    (255, 255, 0),    # nose
-    (0, 255, 255),    # eye_g
-    (0, 128, 255),    # l_eye
-    (0, 0, 255),      # r_eye
-    (139, 69, 19),    # l_brow
-    (160, 82, 45),    # r_brow
+    (255, 255, 0),  # nose
+    (0, 255, 255),  # eye_g
+    (0, 128, 255),  # l_eye
+    (0, 0, 255),  # r_eye
+    (139, 69, 19),  # l_brow
+    (160, 82, 45),  # r_brow
     (255, 105, 180),  # l_ear
-    (255, 20, 147),   # r_ear
-    (255, 0, 0),      # mouth
-    (255, 140, 0),    # u_lip
-    (178, 34, 34),    # l_lip
-    (50, 50, 50),     # hair (dark gray) — distinguishable from background
-    (128, 0, 128),    # hat
-    (255, 0, 255),    # ear_r (ear ring)
+    (255, 20, 147),  # r_ear
+    (255, 0, 0),  # mouth
+    (255, 140, 0),  # u_lip
+    (178, 34, 34),  # l_lip
+    (50, 50, 50),  # hair (dark gray) — distinguishable from background
+    (128, 0, 128),  # hat
+    (255, 0, 255),  # ear_r (ear ring)
     (173, 216, 230),  # neck_l
     (152, 251, 152),  # neck
-    (0, 128, 0),      # cloth
-]
+    (0, 128, 0),  # cloth
+    ]
 
 # Ensure palette has one color per class id including background
 assert len(palette) == (1 + len(label_list))
@@ -61,16 +60,16 @@ assert len(palette) == (1 + len(label_list))
 def class_map_to_rgb(class_map: np.ndarray) -> Image.Image:
     """Convert HxW class id map (0..18) to RGB PIL image using palette."""
     h, w = class_map.shape
-    rgb = np.zeros((h, w, 3), dtype=np.uint8)
+    rgb = np.zeros((h, w, 3), dtype = np.uint8)
     for cid, color in enumerate(palette):
         rgb[class_map == cid] = color
-    return Image.fromarray(rgb, mode='RGB')
+    return Image.fromarray(rgb, mode = 'RGB')
 
 
 def one_hot_from_class_map(class_map: np.ndarray, num_classes: int) -> torch.Tensor:
     """Create CxHxW one-hot tensor from HxW class ids (0..num_classes). Channel 0 corresponds to class id 1."""
     h, w = class_map.shape
-    oh = np.zeros((num_classes, h, w), dtype=np.float32)
+    oh = np.zeros((num_classes, h, w), dtype = np.float32)
     for idx in range(num_classes):
         # class id for this channel is idx+1
         oh[idx] = (class_map == (idx + 1))
@@ -80,10 +79,10 @@ def one_hot_from_class_map(class_map: np.ndarray, num_classes: int) -> torch.Ten
 def class_map_from_one_hot(mask_tensor: torch.Tensor) -> np.ndarray:
     """Convert CxHxW one-hot mask to HxW class ids (0..C) where 0 is background."""
     # mask_tensor: CxHxW, values in {0,1}
-    class_idx = torch.argmax(mask_tensor, dim=0)  # 0..C-1
-    class_map = class_idx.to(dtype=torch.int32).cpu().numpy() + 1  # 1..C
+    class_idx = torch.argmax(mask_tensor, dim = 0)  # 0..C-1
+    class_map = class_idx.to(dtype = torch.int32).cpu().numpy() + 1  # 1..C
     # background: positions where all zeros remain 0
-    bg = (mask_tensor.sum(dim=0) == 0)
+    bg = (mask_tensor.sum(dim = 0) == 0)
     class_map[bg.cpu().numpy()] = 0
     return class_map
 
@@ -91,134 +90,59 @@ def class_map_from_one_hot(mask_tensor: torch.Tensor) -> np.ndarray:
 # ------------- Diffusion sampling (adapted) -------------
 
 def sample_with_mask_and_prompt(
-    model: Unet,
-    scheduler: LinearNoiseScheduler,
-    vae: VQVAE,
-    text_tokenizer,
-    text_model,
-    mask_oh: torch.Tensor,
-    prompt_text: str,
-    cf_guidance_scale: float = 2,
-    num_inference_steps: int = None,
-) -> Image.Image:
+        model: Unet,
+        scheduler: LinearNoiseScheduler,
+        vae: VQVAE,
+        text_tokenizer,
+        text_model,
+        mask_oh: torch.Tensor,
+        prompt_text: str,
+        cf_guidance_scale: float = 1.0,
+        num_inference_steps = 100,
+        ) -> Image.Image:
     """
-    Hybrid sampler:
-    - S == T: use original DDPM single-step posterior (your scheduler.sample_prev_timestep) to match old quality.
-    - S <  T: use DDIM (eta=0) with robust timestep mapping (float linspace -> round -> unique) to avoid duplicates.
+    Run DDPM sampling using provided mask (1xCxHxW) and prompt text, return final decoded PIL image.
     """
-    import torchvision
-    from torchvision.utils import make_grid
-    from PIL import Image
-
-    device = next(model.parameters()).device
-
-    if num_inference_steps is None:
-        num_inference_steps = cfg.diffusion_num_timesteps
-
-    # latent size as before
     im_size = cfg.dataset_im_size // 2 ** sum(cfg.autoencoder_down_sample)
 
-    # start from standard normal at t = T-1
-    xt = torch.randn((1, cfg.autoencoder_z_channels, im_size, im_size), device=device)
+    # Random latent
+    xt = torch.randn((1, cfg.autoencoder_z_channels, im_size, im_size), device = device)
 
-    # text embeds (same as yours)
+    # Text embeddings
     text_prompt = [prompt_text]
     empty_prompt = ['']
     with torch.no_grad():
         text_prompt_embed = get_text_representation(text_prompt, text_tokenizer, text_model, device)
-        empty_text_embed  = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
+        empty_text_embed = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
 
-    # cond inputs (same as yours)
-    mask_oh = mask_oh.to(device)
-    cond_input   = {'text': text_prompt_embed, 'image': mask_oh}
-    uncond_input = {'text': empty_text_embed,  'image': torch.zeros_like(mask_oh, device=device)}
+    # Prepare cond inputs
+    cond_input = {'text': text_prompt_embed, 'image': mask_oh.to(device)}
+    uncond_input = {'text': empty_text_embed, 'image': torch.zeros_like(mask_oh).to(device)}
 
-    T = int(scheduler.num_timesteps)
-    S = int(num_inference_steps)
-    s = 1.0 if (cf_guidance_scale is None) else float(cf_guidance_scale)
-    print(f'num_timesteps = {T}')
-    print(f'num_inference_steps = {S}')
-    # ---------- build timesteps robustly ----------
-    if S >= T:
-        # full chain: exact descending  T-1, ..., 0
-        timesteps = torch.arange(T - 1, -1, -1, device=device, dtype=torch.long)
-    else:
-        # subsample with float linspace -> round -> unique to avoid duplicates
-        ts = torch.linspace(T - 1, 0, S, device=device, dtype=torch.float32)
-        timesteps = torch.round(ts).to(torch.long)
-        # ensure strictly non-increasing without duplicates
-        timesteps = torch.unique_consecutive(timesteps)
-        # force endpoints
-        if timesteps[0].item() != T - 1:
-            timesteps[0] = T - 1
-        if timesteps[-1].item() != 0:
-            timesteps = torch.cat([timesteps, torch.zeros(1, device=device, dtype=torch.long)], dim=0)
-
-    # cache schedule tensors
-    a_bar     = scheduler.alpha_cum_prod.to(device)                # [T]
-    sqrt_ab   = scheduler.sqrt_alpha_cum_prod.to(device)           # [T]
-    sqrt_1mab = scheduler.sqrt_one_minus_alpha_cum_prod.to(device) # [T]
-
-    model.eval()
+    T_list = torch.linspace(cfg.diffusion_num_timesteps - 1, 0, num_inference_steps, dtype = torch.long)
+    assert T_list[-1] == 0, 'Last timestep must be zero.'
+    # Sampling loop
     with torch.no_grad():
-        if len(timesteps) == T:
-            # ===== DDPM: step-by-step posterior (matches your previous behavior) =====
-            for i in range(T - 1, -1, -1):
-                t_b = torch.full((xt.shape[0],), i, device=device, dtype=torch.long)
+        # for i in reversed(range(cfg.diffusion_num_timesteps)):
+        for i in T_list:
+            t = (torch.ones((xt.shape[0],), device = device) * i).long()
+            noise_pred_cond = model(xt, t, cond_input)
+            if cf_guidance_scale > 1:
+                noise_pred_uncond = model(xt, t, uncond_input)
+                noise_pred = noise_pred_uncond + cf_guidance_scale * (noise_pred_cond - noise_pred_uncond)
+            else:
+                noise_pred = noise_pred_cond
+            xt, x0_pred = scheduler.sample_prev_timestep(xt,
+                                                         noise_pred,
+                                                         torch.as_tensor(i, device = device),
+                                                         num_inference_steps
+                                                         )
 
-                if s == 1.0:
-                    eps = model(xt, t_b, cond_input)
-                elif s == 0.0:
-                    eps = model(xt, t_b, uncond_input)
-                else:
-                    xt_cat = torch.cat([xt, xt], dim=0)
-                    t_cat  = torch.cat([t_b, t_b], dim=0)
-                    cond_cat = {
-                        'text':  torch.cat([uncond_input['text'],  cond_input['text']],  dim=0),
-                        'image': torch.cat([uncond_input['image'], cond_input['image']], dim=0),
-                    }
-                    eps_cat = model(xt_cat, t_cat, cond_cat)
-                    eps_uncond, eps_cond = torch.chunk(eps_cat, 2, dim=0)
-                    eps = eps_uncond + s * (eps_cond - eps_uncond)
-
-                # use your scheduler posterior (keeps stochasticity & quality)
-                xt, _ = scheduler.sample_prev_timestep(xt, eps, torch.as_tensor(i, device=device))
-        else:
-            # ===== DDIM (eta=0): multi-step skipping =====
-            for idx in range(len(timesteps) - 1):
-                t_cur  = timesteps[idx]
-                t_next = timesteps[idx + 1]
-                t_b = t_cur.expand(xt.shape[0])
-
-                if s == 1.0:
-                    eps = model(xt, t_b, cond_input)
-                elif s == 0.0:
-                    eps = model(xt, t_b, uncond_input)
-                else:
-                    xt_cat = torch.cat([xt, xt], dim=0)
-                    t_cat  = torch.cat([t_b, t_b], dim=0)
-                    cond_cat = {
-                        'text':  torch.cat([uncond_input['text'],  cond_input['text']],  dim=0),
-                        'image': torch.cat([uncond_input['image'], cond_input['image']], dim=0),
-                    }
-                    eps_cat = model(xt_cat, t_cat, cond_cat)
-                    eps_uncond, eps_cond = torch.chunk(eps_cat, 2, dim=0)
-                    eps = eps_uncond + s * (eps_cond - eps_uncond)
-
-                # x0 estimate
-                x0 = (xt - sqrt_1mab[t_cur] * eps) / (sqrt_ab[t_cur] + 1e-8)
-                x0 = x0.clamp(-1., 1.)  # keep same clipping behavior
-
-                # deterministic DDIM update (eta=0):
-                # eps_hat is consistent residual at t_cur
-                eps_hat = (xt - sqrt_ab[t_cur] * x0) / (sqrt_1mab[t_cur] + 1e-8)
-                xt = sqrt_ab[t_next] * x0 + sqrt_1mab[t_next] * eps_hat
-
-        # decode as before
+        # Decode final latent
         ims = vae.decode(xt)
         ims = torch.clamp(ims, -1., 1.).detach().cpu()
         ims = (ims + 1) / 2
-        grid = make_grid(ims, nrow=1)
+        grid = make_grid(ims, nrow = 1)
         img = torchvision.transforms.ToPILImage()(grid)
         return img
 
@@ -235,9 +159,9 @@ class ModelBundle:
 
 
 def load_models_and_configs(
-    ldm_ckpt_path: Path,
-    vqvae_ckpt_path: Path,
-) -> ModelBundle:
+        ldm_ckpt_path: Path,
+        vqvae_ckpt_path: Path,
+        ) -> ModelBundle:
     # Validate
     assert cfg.condition_config is not None, 'Condition config required for text+image conditioning.'
     condition_types = cfg.ldm_condition_types
@@ -245,42 +169,46 @@ def load_models_and_configs(
 
     # Tokenizer and text model
     with torch.no_grad():
-        text_tokenizer, text_model = get_tokenizer_and_model(cfg.ldm_text_condition_text_embed_model, device=device)
+        text_tokenizer, text_model = get_tokenizer_and_model(cfg.ldm_text_condition_text_embed_model, device = device)
 
     # Unet
-    model = Unet(im_channels=cfg.autoencoder_z_channels, model_config=cfg.diffusion_model_config).to(device)
+    model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
     model.eval()
     if not ldm_ckpt_path.exists():
         raise FileNotFoundError(f'Model checkpoint not found: {ldm_ckpt_path}')
-    model.load_state_dict(torch.load(str(ldm_ckpt_path), map_location=device))
+    model.load_state_dict(torch.load(str(ldm_ckpt_path), map_location = device))
 
     # VQVAE
     autoencoder_config = {
-        'z_channels': cfg.autoencoder_z_channels,
-        'codebook_size': cfg.autoencoder_codebook_size,
-        'down_channels': list(cfg.autoencoder_down_channels),
-        'mid_channels': list(cfg.autoencoder_mid_channels),
-        'down_sample': list(cfg.autoencoder_down_sample),
-        'attn_down': list(cfg.autoencoder_attn_down),
-        'norm_channels': cfg.autoencoder_norm_channels,
-        'num_heads': cfg.autoencoder_num_heads,
+        'z_channels'     : cfg.autoencoder_z_channels,
+        'codebook_size'  : cfg.autoencoder_codebook_size,
+        'down_channels'  : list(cfg.autoencoder_down_channels),
+        'mid_channels'   : list(cfg.autoencoder_mid_channels),
+        'down_sample'    : list(cfg.autoencoder_down_sample),
+        'attn_down'      : list(cfg.autoencoder_attn_down),
+        'norm_channels'  : cfg.autoencoder_norm_channels,
+        'num_heads'      : cfg.autoencoder_num_heads,
         'num_down_layers': cfg.autoencoder_num_down_layers,
-        'num_mid_layers': cfg.autoencoder_num_mid_layers,
-        'num_up_layers': cfg.autoencoder_num_up_layers,
-    }
-    vae = VQVAE(im_channels=cfg.dataset_im_channels, model_config=autoencoder_config).to(device)
+        'num_mid_layers' : cfg.autoencoder_num_mid_layers,
+        'num_up_layers'  : cfg.autoencoder_num_up_layers,
+        }
+    vae = VQVAE(im_channels = cfg.dataset_im_channels, model_config = autoencoder_config).to(device)
     vae.eval()
     if not vqvae_ckpt_path.exists():
         raise FileNotFoundError(f'VAE checkpoint not found: {vqvae_ckpt_path}')
-    vae.load_state_dict(torch.load(str(vqvae_ckpt_path), map_location=device))
+    vae.load_state_dict(torch.load(str(vqvae_ckpt_path), map_location = device))
 
     # Scheduler
-    scheduler = LinearNoiseScheduler(num_timesteps=cfg.diffusion_num_timesteps,
-                                     beta_start=cfg.diffusion_beta_start,
-                                     beta_end=cfg.diffusion_beta_end)
+    scheduler = LinearNoiseScheduler(
+        num_timesteps = cfg.diffusion_num_timesteps,
+        beta_start = cfg.diffusion_beta_start,
+        beta_end = cfg.diffusion_beta_end,
+        )
 
-    return ModelBundle(model=model, vae=vae, scheduler=scheduler,
-                       text_tokenizer=text_tokenizer, text_model=text_model)
+    return ModelBundle(
+        model = model, vae = vae, scheduler = scheduler,
+        text_tokenizer = text_tokenizer, text_model = text_model,
+        )
 
 
 # ------------- GUI -------------
@@ -293,14 +221,14 @@ class MaskPainterGUI:
         # Initialize dataset once for caption alignment and efficiency
         try:
             self.dataset = CelebDataset(
-                split='train',
-                im_path=cfg.dataset_im_path,
-                im_size=cfg.dataset_im_size,
-                im_channels=cfg.dataset_im_channels,
-                use_latents=True,
-                latent_path=str(Path(cfg.train_task_name) / cfg.train_vqvae_latent_dir_name),
-                condition_config=cfg.condition_config,
-            )
+                split = 'train',
+                im_path = cfg.dataset_im_path,
+                im_size = cfg.dataset_im_size,
+                im_channels = cfg.dataset_im_channels,
+                use_latents = True,
+                latent_path = str(Path(cfg.train_task_name) / cfg.train_vqvae_latent_dir_name),
+                condition_config = cfg.condition_config,
+                )
         except Exception:
             self.dataset = None
 
@@ -324,7 +252,7 @@ class MaskPainterGUI:
         self.history_limit: int = 50
 
         # Mask state as class map (0..num_classes)
-        self.class_map = np.zeros((self.h, self.w), dtype=np.int32)
+        self.class_map = np.zeros((self.h, self.w), dtype = np.int32)
         self.mask_img = class_map_to_rgb(self.class_map)
         self.mask_tk = ImageTk.PhotoImage(self.mask_img)
 
@@ -333,43 +261,43 @@ class MaskPainterGUI:
 
         # Layout frames
         self.root_frame = tk.Frame(master)
-        self.root_frame.pack(fill=tk.BOTH, expand=True)
+        self.root_frame.pack(fill = tk.BOTH, expand = True)
 
         self.left_frame = tk.Frame(self.root_frame)
-        self.left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.left_frame.pack(side = tk.LEFT, fill = tk.BOTH, expand = True)
 
         self.right_frame = tk.Frame(self.root_frame)
-        self.right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
+        self.right_frame.pack(side = tk.RIGHT, fill = tk.BOTH, expand = True)
 
         # Top-left row: action buttons
         btns_frame = tk.Frame(self.left_frame)
-        btns_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
-        self.btn_random_prompt = tk.Button(btns_frame, text='Random Prompt', command=self.load_random_prompt)
-        self.btn_random_prompt.pack(side=tk.LEFT, padx=2)
-        self.btn_random_mask = tk.Button(btns_frame, text='Random Mask', command=self.load_random_mask)
-        self.btn_random_mask.pack(side=tk.LEFT, padx=2)
-        self.btn_clear_mask = tk.Button(btns_frame, text='Clear Mask', command=self.clear_mask)
-        self.btn_clear_mask.pack(side=tk.LEFT, padx=2)
-        self.btn_refresh_mask = tk.Button(btns_frame, text='Refresh Mask', command=self.refresh_current_mask)
-        self.btn_refresh_mask.pack(side=tk.LEFT, padx=2)
+        btns_frame.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
+        self.btn_random_prompt = tk.Button(btns_frame, text = 'Random Prompt', command = self.load_random_prompt)
+        self.btn_random_prompt.pack(side = tk.LEFT, padx = 2)
+        self.btn_random_mask = tk.Button(btns_frame, text = 'Random Mask', command = self.load_random_mask)
+        self.btn_random_mask.pack(side = tk.LEFT, padx = 2)
+        self.btn_clear_mask = tk.Button(btns_frame, text = 'Clear Mask', command = self.clear_mask)
+        self.btn_clear_mask.pack(side = tk.LEFT, padx = 2)
+        self.btn_refresh_mask = tk.Button(btns_frame, text = 'Refresh Mask', command = self.refresh_current_mask)
+        self.btn_refresh_mask.pack(side = tk.LEFT, padx = 2)
 
         # Second row: prompt input
         self.prompt_var = tk.StringVar()
-        self.prompt_entry = tk.Entry(self.left_frame, textvariable=self.prompt_var, width=60)
-        self.prompt_entry.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+        self.prompt_entry = tk.Entry(self.left_frame, textvariable = self.prompt_var, width = 60)
+        self.prompt_entry.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
 
         # Third row: cf_guidance_scale and num_inference_steps input
         cf_frame = tk.Frame(self.left_frame)
-        cf_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
-        tk.Label(cf_frame, text='CF Guidance Scale:').pack(side=tk.LEFT, padx=2)
-        self.cf_guidance_scale_var = tk.DoubleVar(value=1.0)
-        self.cf_guidance_scale_entry = tk.Entry(cf_frame, textvariable=self.cf_guidance_scale_var, width=10)
-        self.cf_guidance_scale_entry.pack(side=tk.LEFT, padx=2)
+        cf_frame.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
+        tk.Label(cf_frame, text = 'CF Guidance Scale:').pack(side = tk.LEFT, padx = 2)
+        self.cf_guidance_scale_var = tk.DoubleVar(value = 1.0)
+        self.cf_guidance_scale_entry = tk.Entry(cf_frame, textvariable = self.cf_guidance_scale_var, width = 10)
+        self.cf_guidance_scale_entry.pack(side = tk.LEFT, padx = 2)
 
-        tk.Label(cf_frame, text='Sampling Steps:').pack(side=tk.LEFT, padx=(10, 2))
-        self.num_inference_steps_var = tk.IntVar(value=cfg.diffusion_num_timesteps)
-        self.num_inference_steps_entry = tk.Entry(cf_frame, textvariable=self.num_inference_steps_var, width=10)
-        self.num_inference_steps_entry.pack(side=tk.LEFT, padx=2)
+        tk.Label(cf_frame, text = 'Sampling Steps:').pack(side = tk.LEFT, padx = (10, 2))
+        self.num_inference_steps_var = tk.IntVar(value = cfg.diffusion_num_timesteps)
+        self.num_inference_steps_entry = tk.Entry(cf_frame, textvariable = self.num_inference_steps_var, width = 10)
+        self.num_inference_steps_entry.pack(side = tk.LEFT, padx = 2)
 
         # Prepare variables for brush preview and label (preview will be created next to palette in the fourth row)
         self.brush_info_var = tk.StringVar()
@@ -380,16 +308,16 @@ class MaskPainterGUI:
 
         # Row to horizontally align mask canvas (left) and generated image (right)
         self.row_align = tk.Frame(self.root_frame)
-        self.row_align.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+        self.row_align.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
         self.canvas_holder = tk.Frame(self.row_align)
-        self.canvas_holder.pack(side=tk.LEFT, anchor='nw')
+        self.canvas_holder.pack(side = tk.LEFT, anchor = 'nw')
         self.image_holder = tk.Frame(self.row_align)
-        self.image_holder.pack(side=tk.LEFT, anchor='nw', padx=6)
+        self.image_holder.pack(side = tk.LEFT, anchor = 'nw', padx = 6)
 
         # Canvas for mask (placed inside the left holder)
-        self.canvas = tk.Canvas(self.canvas_holder, width=self.w, height=self.h, bg='black')
-        self.canvas.pack(side=tk.TOP)
-        self.canvas_img = self.canvas.create_image(0, 0, anchor='nw', image=self.mask_tk)
+        self.canvas = tk.Canvas(self.canvas_holder, width = self.w, height = self.h, bg = 'black')
+        self.canvas.pack(side = tk.TOP)
+        self.canvas_img = self.canvas.create_image(0, 0, anchor = 'nw', image = self.mask_tk)
 
         # Mouse bindings
         self.canvas.bind('<Button-1>', self.on_button_press)
@@ -408,21 +336,20 @@ class MaskPainterGUI:
 
         # Palette and brush preview placed under the mask canvas
         self.palette_frame = tk.Frame(self.canvas_holder)
-        self.palette_frame.pack(side=tk.TOP, anchor='nw', padx=6, pady=6)
+        self.palette_frame.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
         self.build_palette_buttons()
 
-
         # Right panel: generated image and controls
-        self.generate_btn = tk.Button(self.right_frame, text='Generate', command=self.on_generate, width=20, height=2)
-        self.generate_btn.pack(side=tk.TOP, pady=6)
+        self.generate_btn = tk.Button(self.right_frame, text = 'Generate', command = self.on_generate, width = 20, height = 2)
+        self.generate_btn.pack(side = tk.TOP, pady = 6)
 
         self.status_var = tk.StringVar()
         self.status_var.set('Ready')
-        self.status_label = tk.Label(self.right_frame, textvariable=self.status_var)
-        self.status_label.pack(side=tk.TOP, pady=2)
+        self.status_label = tk.Label(self.right_frame, textvariable = self.status_var)
+        self.status_label.pack(side = tk.TOP, pady = 2)
 
         self.image_panel = tk.Label(self.image_holder)
-        self.image_panel.pack(side=tk.TOP)
+        self.image_panel.pack(side = tk.TOP)
 
         # Initialize with a random mask; prompt will match the same image
         self.load_random_mask()
@@ -430,43 +357,45 @@ class MaskPainterGUI:
     def build_palette_buttons(self):
         # Container that holds brush preview (left) and palette buttons (right)
         container = tk.Frame(self.palette_frame)
-        container.pack(side=tk.TOP, anchor='w')
+        container.pack(side = tk.TOP, anchor = 'w')
 
         # Left: Brush size visual preview and current label
         preview_col = tk.Frame(container)
-        preview_col.pack(side=tk.LEFT, anchor='nw', padx=2)
-        self.brush_preview = tk.Canvas(preview_col, width=self.brush_preview_size, height=self.brush_preview_size,
-                                       bg='#f0f0f0', highlightthickness=1, highlightbackground='#cccccc')
-        self.brush_preview.pack(side=tk.TOP, anchor='nw')
+        preview_col.pack(side = tk.LEFT, anchor = 'nw', padx = 2)
+        self.brush_preview = tk.Canvas(
+            preview_col, width = self.brush_preview_size, height = self.brush_preview_size,
+            bg = '#f0f0f0', highlightthickness = 1, highlightbackground = '#cccccc',
+            )
+        self.brush_preview.pack(side = tk.TOP, anchor = 'nw')
         # Label showing current brush label next to preview
-        self.brush_label = tk.Label(preview_col, textvariable=self.brush_label_var)
-        self.brush_label.pack(side=tk.TOP, anchor='nw', pady=4)
+        self.brush_label = tk.Label(preview_col, textvariable = self.brush_label_var)
+        self.brush_label.pack(side = tk.TOP, anchor = 'nw', pady = 4)
         # Brush size textual info placed with preview (fourth row)
-        self.brush_info_label = tk.Label(preview_col, textvariable=self.brush_info_var)
-        self.brush_info_label.pack(side=tk.TOP, anchor='nw', pady=2)
+        self.brush_info_label = tk.Label(preview_col, textvariable = self.brush_info_var)
+        self.brush_info_label.pack(side = tk.TOP, anchor = 'nw', pady = 2)
 
         # Right: palette buttons
         buttons_col = tk.Frame(container)
-        buttons_col.pack(side=tk.LEFT, anchor='nw', padx=8)
+        buttons_col.pack(side = tk.LEFT, anchor = 'nw', padx = 8)
 
         # Background (class 0) button as an 'eraser'
         r, g, b = palette[0]
         bg_hex = '#%02x%02x%02x' % (r, g, b)
         luminance = 0.299 * r + 0.587 * g + 0.114 * b
         fg_color_bg = 'white' if luminance < 128 else 'black'
-        tk.Button(buttons_col, text='background', bg=bg_hex, fg=fg_color_bg, command=lambda: self.set_brush_class(0)).pack(side=tk.TOP, anchor='w', padx=2, pady=2)
+        tk.Button(buttons_col, text = 'background', bg = bg_hex, fg = fg_color_bg, command = lambda: self.set_brush_class(0)).pack(side = tk.TOP, anchor = 'w', padx = 2, pady = 2)
 
         # Create a grid of palette buttons for semantic labels (1..18)
         grid = tk.Frame(buttons_col)
-        grid.pack(side=tk.TOP, anchor='w')
+        grid.pack(side = tk.TOP, anchor = 'w')
         for i, lbl in enumerate(label_list):
             r, g, b = palette[i + 1]
             color_hex = '#%02x%02x%02x' % (r, g, b)
             # Choose white text for dark backgrounds to avoid unreadable labels (e.g., hair)
             luminance = 0.299 * r + 0.587 * g + 0.114 * b
             fg_color = 'white' if luminance < 128 else 'black'
-            btn = tk.Button(grid, text=lbl, bg=color_hex, fg=fg_color, command=lambda idx=i+1: self.set_brush_class(idx))
-            btn.grid(row=i // 6, column=i % 6, padx=2, pady=2, sticky='nsew')
+            btn = tk.Button(grid, text = lbl, bg = color_hex, fg = fg_color, command = lambda idx = i + 1: self.set_brush_class(idx))
+            btn.grid(row = i // 6, column = i % 6, padx = 2, pady = 2, sticky = 'nsew')
 
         # Initialize preview and label now that preview widget exists
         self.update_brush_info_label()
@@ -477,7 +406,7 @@ class MaskPainterGUI:
         if class_id == 0:
             self.status_var.set('Brush: background')
         else:
-            self.status_var.set(f'Brush: {label_list[class_id-1]}')
+            self.status_var.set(f'Brush: {label_list[class_id - 1]}')
         self.update_brush_info_label()
         self.update_brush_preview()
 
@@ -496,7 +425,7 @@ class MaskPainterGUI:
     def refresh_mask_image(self):
         self.mask_img = class_map_to_rgb(self.class_map)
         self.mask_tk = ImageTk.PhotoImage(self.mask_img)
-        self.canvas.itemconfig(self.canvas_img, image=self.mask_tk)
+        self.canvas.itemconfig(self.canvas_img, image = self.mask_tk)
 
     # -------- Painting helpers and UI updates --------
     def _paint_circle_at(self, x: int, y: int):
@@ -566,7 +495,7 @@ class MaskPainterGUI:
         # Keep circle within canvas
         r = max(1, min(r, min(cx, cy) - 4))
         # Background
-        self.brush_preview.create_rectangle(0, 0, W, H, fill='#f0f0f0', outline='')
+        self.brush_preview.create_rectangle(0, 0, W, H, fill = '#f0f0f0', outline = '')
         # Circle color uses current class palette color for better intuition
         color_idx = max(0, min(self.current_class_id, len(palette) - 1))
         r_col, g_col, b_col = palette[color_idx]
@@ -575,9 +504,9 @@ class MaskPainterGUI:
         luminance = 0.299 * r_col + 0.587 * g_col + 0.114 * b_col
         text_fg = 'white' if luminance < 128 else 'black'
         # Draw circle representing brush size (diameter = 2r)
-        self.brush_preview.create_oval(cx - r, cy - r, cx + r, cy + r, fill=fill_hex, outline='black')
+        self.brush_preview.create_oval(cx - r, cy - r, cx + r, cy + r, fill = fill_hex, outline = 'black')
         # Add size text at the center (no crosshair)
-        self.brush_preview.create_text(cx, cy, text=f'{self.brush_radius}px', fill=text_fg, font=('Arial', 10, 'bold'))
+        self.brush_preview.create_text(cx, cy, text = f'{self.brush_radius}px', fill = text_fg, font = ('Arial', 10, 'bold'))
 
     def push_history(self):
         # Push a snapshot of current class_map to undo stack
@@ -587,7 +516,7 @@ class MaskPainterGUI:
         # New action invalidates redo stack
         self.redo_stack.clear()
 
-    def on_undo(self, event=None):
+    def on_undo(self, event = None):
         if not self.undo_stack:
             self.status_var.set('Nothing to undo')
             return 'break'
@@ -598,7 +527,7 @@ class MaskPainterGUI:
         self.status_var.set('Undo')
         return 'break'
 
-    def on_redo(self, event=None):
+    def on_redo(self, event = None):
         if not self.redo_stack:
             self.status_var.set('Nothing to redo')
             return 'break'
@@ -650,7 +579,7 @@ class MaskPainterGUI:
         except Exception:
             display_img = pil_img
         self.generated_tk = ImageTk.PhotoImage(display_img)
-        self.image_panel.config(image=self.generated_tk)
+        self.image_panel.config(image = self.generated_tk)
 
     def clear_mask(self):
         # Push current state to undo before clearing
@@ -692,7 +621,7 @@ class MaskPainterGUI:
             'A person with long brown hair and glasses.',
             'A portrait with red lipstick and wavy hair.',
             'A person in a blue shirt with neat hair.'
-        ]
+            ]
         self.prompt_var.set(prompts[np.random.randint(0, len(prompts))])
         self.status_var.set('Random prompt picked (generic fallback)')
 
@@ -702,14 +631,14 @@ class MaskPainterGUI:
             dataset = self.dataset
             if dataset is None:
                 dataset = CelebDataset(
-                    split='train',
-                    im_path=cfg.dataset_im_path,
-                    im_size=cfg.dataset_im_size,
-                    im_channels=cfg.dataset_im_channels,
-                    use_latents=True,
-                    latent_path=str(Path(cfg.train_task_name) / cfg.train_vqvae_latent_dir_name),
-                    condition_config=cfg.condition_config,
-                )
+                    split = 'train',
+                    im_path = cfg.dataset_im_path,
+                    im_size = cfg.dataset_im_size,
+                    im_channels = cfg.dataset_im_channels,
+                    use_latents = True,
+                    latent_path = str(Path(cfg.train_task_name) / cfg.train_vqvae_latent_dir_name),
+                    condition_config = cfg.condition_config,
+                    )
                 self.dataset = dataset
 
             mask_idx = np.random.randint(0, len(dataset.masks))
@@ -718,7 +647,7 @@ class MaskPainterGUI:
             class_map = class_map_from_one_hot(mask)
             # Ensure expected size
             if class_map.shape != (self.h, self.w):
-                class_map = np.array(Image.fromarray(class_map.astype(np.uint8), mode='L').resize((self.w, self.h), Image.NEAREST), dtype=np.int32)
+                class_map = np.array(Image.fromarray(class_map.astype(np.uint8), mode = 'L').resize((self.w, self.h), Image.NEAREST), dtype = np.int32)
             self.class_map = class_map.astype(np.int32)
             self.refresh_mask_image()
             # Reset history for new mask session and push initial state
@@ -766,9 +695,9 @@ class MaskPainterGUI:
             class_map = class_map_from_one_hot(mask)
             if class_map.shape != (self.h, self.w):
                 class_map = np.array(
-                    Image.fromarray(class_map.astype(np.uint8), mode='L').resize((self.w, self.h), Image.NEAREST),
-                    dtype=np.int32,
-                )
+                    Image.fromarray(class_map.astype(np.uint8), mode = 'L').resize((self.w, self.h), Image.NEAREST),
+                    dtype = np.int32,
+                    )
             self.class_map = class_map.astype(np.int32)
             self.refresh_mask_image()
             # Reset history for refreshed mask and push initial state
@@ -784,40 +713,34 @@ class MaskPainterGUI:
         if self.is_generating:
             return
         self.is_generating = True
-        self.generate_btn.config(state=tk.DISABLED)
+        self.generate_btn.config(state = tk.DISABLED)
         self.status_var.set('Generating... this may take a while')
         prompt_text = self.prompt_var.get().strip()
         class_map_copy = self.class_map.copy()
 
         def worker():
-            try:
-                cf_scale = self.cf_guidance_scale_var.get()
-                num_steps = self.num_inference_steps_var.get()
-                mask_oh = one_hot_from_class_map(class_map_copy, self.num_classes).unsqueeze(0).to(device)
-                img = sample_with_mask_and_prompt(
-                    model=self.bundle.model,
-                    scheduler=self.bundle.scheduler,
-                    vae=self.bundle.vae,
-                    text_tokenizer=self.bundle.text_tokenizer,
-                    text_model=self.bundle.text_model,
-                    mask_oh=mask_oh,
-                    prompt_text=prompt_text or '',
-                    cf_guidance_scale=cf_scale,
-                    num_inference_steps=num_steps,
+            cf_scale = self.cf_guidance_scale_var.get()
+            num_steps = self.num_inference_steps_var.get()
+            mask_oh = one_hot_from_class_map(class_map_copy, self.num_classes).unsqueeze(0).to(device)
+            img = sample_with_mask_and_prompt(
+                model = self.bundle.model,
+                scheduler = self.bundle.scheduler,
+                vae = self.bundle.vae,
+                text_tokenizer = self.bundle.text_tokenizer,
+                text_model = self.bundle.text_model,
+                mask_oh = mask_oh,
+                prompt_text = prompt_text or '',
+                cf_guidance_scale = cf_scale,
+                num_inference_steps = num_steps,
                 )
-                self.generated_img = img
-                self.image_panel.after(0, lambda: self._set_right_panel_image(self.generated_img))
-                self.status_var.set('Done')
-            except Exception as e:
-                self.status_var.set('Failed')
-                messagebox.showerror('Error', f'Generation failed: {e}')
-            finally:
-                self.is_generating = False
-                self.generate_btn.config(state=tk.NORMAL)
+            self.generated_img = img
+            self.image_panel.after(0, lambda: self._set_right_panel_image(self.generated_img))
+            self.status_var.set('Done')
 
-        threading.Thread(target=worker, daemon=True).start()
+            self.is_generating = False
+            self.generate_btn.config(state = tk.NORMAL)
 
-
+        threading.Thread(target = worker, daemon = True).start()
 
 
 # ------------- Main entry -------------
