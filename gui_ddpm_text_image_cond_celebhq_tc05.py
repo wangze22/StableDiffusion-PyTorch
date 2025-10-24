@@ -563,21 +563,33 @@ class MaskPainterGUI:
         self.refresh_mask_image()
 
     def load_random_prompt(self):
-        """Pick a random caption from the current image's captions, if available.
+        """Pick a random caption from the current mask's corresponding image captions.
         Does not change mask or right-side image.
         """
-        # Prefer dataset captions tied to current image index
+        # Must have a current index to select prompts for current mask
+        if self.current_index is None:
+            self.status_var.set('No mask loaded, cannot pick prompt')
+            print("[DEBUG] load_random_prompt: No current_index")
+            return
+
         try:
-            if self.dataset is not None and self.current_index is not None:
+            if self.dataset is not None:
                 # CelebDataset stores caption file paths in `texts` and exposes `_get_captions(index)` to read them.
                 captions = self.dataset._get_captions(self.current_index)
-                if isinstance(captions, list) and len(captions) > 0:
-                    self.prompt_var.set(random.choice(captions))
-                    self.status_var.set('Random prompt picked from current image captions')
+                print(f"[DEBUG] load_random_prompt: Found {len(captions) if captions else 0} captions for mask #{self.current_index}")
+                if captions and len(captions) > 0:
+                    selected_caption = random.choice(captions)
+                    self.prompt_var.set(selected_caption)
+                    self.status_var.set(f'Random prompt picked from mask #{self.current_index} captions')
+                    print(f"[DEBUG] Selected caption: {selected_caption}")
                     return
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Error in load_random_prompt: {e}")
             pass
-        # Fallback to generic prompts
+
+        # Fallback if dataset not available or captions missing
+        self.status_var.set('No captions available for current mask')
+        print("[DEBUG] Using fallback prompts")
         prompts = [
             'She is a woman with blond hair. She is wearing lipstick.',
             'A smiling man with short black hair, wearing a hat.',
@@ -623,10 +635,16 @@ class MaskPainterGUI:
             # Also set the prompt to a caption corresponding to this image (if available)
             try:
                 captions = dataset._get_captions(mask_idx)
-                if isinstance(captions, list) and len(captions) > 0:
-                    self.prompt_var.set(random.choice(captions))
-            except Exception:
-                pass
+                if captions and len(captions) > 0:
+                    selected_caption = random.choice(captions)
+                    self.prompt_var.set(selected_caption)
+                    print(f"[DEBUG] Loaded caption for mask #{mask_idx}: {selected_caption}")
+                else:
+                    print(f"[DEBUG] No captions found for mask #{mask_idx}")
+                    self.prompt_var.set('')
+            except Exception as e:
+                print(f"[DEBUG] Error loading caption for mask #{mask_idx}: {e}")
+                self.prompt_var.set('')
 
             # Also load and show the corresponding original image on the right as reference
             try:
