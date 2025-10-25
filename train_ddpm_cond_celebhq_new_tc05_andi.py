@@ -110,10 +110,10 @@ class LDM_AnDi(ProgressiveTrain):
             )
 
         # Create EMA model
-        ema_model = copy.deepcopy(self.model)
-        ema_model.eval()
-        for param in ema_model.parameters():
-            param.requires_grad = False
+        # ema_model = copy.deepcopy(self.model)
+        # ema_model.eval()
+        # for param in ema_model.parameters():
+        #     param.requires_grad = False
 
         self.model.train()
 
@@ -208,9 +208,9 @@ class LDM_AnDi(ProgressiveTrain):
                 scaler.update()
 
                 # Update EMA model
-                with torch.no_grad():
-                    for ema_param, param in zip(ema_model.parameters(), self.model.parameters()):
-                        ema_param.data = ema_param.data * 0.9999 + param.data * (1 - 0.9999)
+                # with torch.no_grad():
+                #     for ema_param, param in zip(ema_model.parameters(), self.model.parameters()):
+                #         ema_param.data = ema_param.data * 0.9999 + param.data * (1 - 0.9999)
             memory_info = psutil.virtual_memory()
             memory_used_gb = memory_info.used / (1024 ** 3)
             memory_percent = memory_info.percent
@@ -235,33 +235,31 @@ class LDM_AnDi(ProgressiveTrain):
             persist_loss_history(loss_history, run_artifacts['logs_dir'])
             plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
 
-            should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == num_epochs)
+            should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == cfg.train_ldm_epochs)
+            checkpoints_dir = run_artifacts['checkpoints_dir']
+            state_dict = self.model.state_dict()
+            # ema_state_dict = ema_model.state_dict()
+            latest_ckpt_path = run_artifacts['run_dir'] / cfg.model_paths_ldm_ckpt_name
+            torch.save(state_dict, latest_ckpt_path)
+            # ema_latest_ckpt_path = run_artifacts['run_dir'] / f'ema_{cfg.model_paths_ldm_ckpt_name}'
+            # torch.save(ema_state_dict, ema_latest_ckpt_path)
+
             if should_save:
-                state_dict = self.model.state_dict()
-                ema_state_dict = ema_model.state_dict()
-                checkpoints_dir = run_artifacts['checkpoints_dir']
-
-                # Save regular model
-                latest_ckpt_path = run_artifacts['run_dir'] / cfg.model_paths_ldm_ckpt_name
                 epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_{cfg.model_paths_ldm_ckpt_name}'
-                torch.save(state_dict, latest_ckpt_path)
+                # legacy_ckpt_path = legacy_ckpt_dir / cfg.model_paths_ldm_ckpt_name
                 torch.save(state_dict, epoch_ckpt_path)
-                legacy_ckpt_path = legacy_ckpt_dir / cfg.model_paths_ldm_ckpt_name
-                torch.save(state_dict, legacy_ckpt_path)
+                # torch.save(state_dict, legacy_ckpt_path)
 
-                # Save EMA model
-                ema_latest_ckpt_path = run_artifacts['run_dir'] / f'ema_{cfg.model_paths_ldm_ckpt_name}'
-                ema_epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_ema_{cfg.model_paths_ldm_ckpt_name}'
-                torch.save(ema_state_dict, ema_latest_ckpt_path)
-                torch.save(ema_state_dict, ema_epoch_ckpt_path)
-                ema_legacy_ckpt_path = legacy_ckpt_dir / f'ema_{cfg.model_paths_ldm_ckpt_name}'
-                torch.save(ema_state_dict, ema_legacy_ckpt_path)
+                # ema_epoch_ckpt_path = checkpoints_dir / f'epoch_{epoch_idx + 1:03d}_ema_{cfg.model_paths_ldm_ckpt_name}'
+                # ema_legacy_ckpt_path = legacy_ckpt_dir / f'ema_{cfg.model_paths_ldm_ckpt_name}'
+                # torch.save(ema_state_dict, ema_epoch_ckpt_path)
+                # torch.save(ema_state_dict, ema_legacy_ckpt_path)
 
                 logger.info(
-                    'Saved checkpoints: latest=%s | epoch=%s | ema_latest=%s',
+                    'Saved checkpoints: latest=%s | epoch=%s',
                     latest_ckpt_path,
                     epoch_ckpt_path,
-                    ema_latest_ckpt_path,
+                    # ema_latest_ckpt_path,
                     )
 
         logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
@@ -271,7 +269,7 @@ class LDM_AnDi(ProgressiveTrain):
 if __name__ == '__main__':
     num_images = 3000000
     num_workers = 4
-    model_paths_ldm_ckpt_resume = 'runs_tc05/ddpm_20251024-132839/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
+    model_paths_ldm_ckpt_resume = 'runs_tc05_qn_train_PC/ddpm_20251025-045721/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
 
     # Instantiate the unet model
     model = Unet(
@@ -279,7 +277,6 @@ if __name__ == '__main__':
         model_config = cfg.diffusion_model_config,
         ).to(device)
 
-    model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
 
     trainer = LDM_AnDi(model = model)
 
@@ -291,11 +288,17 @@ if __name__ == '__main__':
         output_bit = andi_cfg.qn_feature_bit_range[0],
         weight_bit = andi_cfg.qn_weight_bit_range[0],
         )
-    # trainer.add_enhance_branch_LoR()
+    trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
+
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     # trainer.train_model(
     #     num_workers = num_workers,
     #     num_images = num_images,
     #     )
+
     trainer.progressive_train(
         qn_cycle = andi_cfg.qn_cycle,
         update_layer_type_list = ['layers_qn_lsq'],
@@ -304,6 +307,23 @@ if __name__ == '__main__':
         input_bit_range = andi_cfg.qn_feature_bit_range,
         output_bit_range = andi_cfg.qn_feature_bit_range,
         noise_scale_range = andi_cfg.qn_noise_range,
+        num_workers = num_workers,
+        num_images = num_images,
+    )
+
+    trainer.add_enhance_branch_LoR(
+        ops_factor = 0.05,
+        )
+
+    trainer.add_enhance_layers(ops_factor = 0.05)
+    trainer.progressive_train(
+        qn_cycle = andi_cfg.qna_cycle,
+        update_layer_type_list = ['layers_qn_lsq'],
+        start_cycle = 0,
+        weight_bit_range = andi_cfg.qna_weight_bit_range,
+        input_bit_range = andi_cfg.qna_feature_bit_range,
+        output_bit_range = andi_cfg.qna_feature_bit_range,
+        noise_scale_range = andi_cfg.qna_noise_range,
         num_workers = num_workers,
         num_images = num_images,
     )

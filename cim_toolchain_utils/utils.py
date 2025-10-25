@@ -136,6 +136,23 @@ def save_to_json(dictionary, filename):
     with open(filename, 'w') as file:
         json.dump(formatted_dict, file, indent = 4, default = handle_non_serializable)
 
+def ensure_path_exists(path):
+    """
+    如果路径是一个文件，则创建其父目录；
+    如果路径是一个目录，则直接创建该目录。
+    """
+    # 判断是否是一个文件（通过扩展名简单判断）
+    if os.path.splitext(path)[1]:  # 有扩展名，认为是文件
+        dir_path = os.path.dirname(path)
+    else:
+        dir_path = path
+
+    if not os.path.exists(dir_path):
+        os.makedirs(dir_path)
+        print(f"Created directory: {dir_path}")
+    else:
+        print(f"Directory already exists: {dir_path}")
+
 def save_pickle(file_name, dict_):
     # 获取文件夹名称
     directory = os.path.dirname(file_name)

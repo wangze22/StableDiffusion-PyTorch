@@ -612,6 +612,8 @@ class ProgressiveTrain():
             if assign_layers and name not in assign_layers:
                 continue
             if type(module) in convert_layer_type_list:
+                dev = next(module.parameters()).device
+                print(f'original moudle is on device: {dev}')
                 if 'conv' in type(module).__name__.lower():
                     new_module = tar_conv_class(
                         in_channels = module.in_channels,
@@ -647,7 +649,7 @@ class ProgressiveTrain():
             print(f"Converted to {tar_layer_type} Layer: {name}")
             self.find_and_replace_module(self.model, name, new_module)
         print(f"=============================================\n")
-        self.set_device()
+        # self.set_device()
 
     def convert_to_modules(self,
                            convert_layer_type_list,
@@ -704,7 +706,7 @@ class ProgressiveTrain():
             print(f"Converted to {tar_layer_type} Layer: {name}")
             self.find_and_replace_module(self.model, name, new_module)
         print(f"=============================================\n")
-        self.set_device()
+        # self.set_device()
 
     def convert_to_lsq_int_layers(self,
                                   int_grad = False,
@@ -866,7 +868,7 @@ class ProgressiveTrain():
                 self.find_and_replace_module(model, name, new_module)
             print(f'=============================================\n')
 
-        self.set_device()
+        # self.set_device()
 
     def copy_meta_info(self, module, new_module):
         new_module.name = module.name
@@ -879,51 +881,50 @@ class ProgressiveTrain():
             new_module.step_size_input.data = module.step_size_input.data
             new_module.step_size_output.data = module.step_size_output.data
 
-    def add_enhance_layers(self, conv_groups = 4):
+    def add_enhance_layers(self, ops_factor = 0.05):
         to_replace = []
 
         for name, module in self.model.named_modules():
             if type(module) in reg_dict.custom_conv_layers:
                 # 在 Conv2d_qn_lsq 层后添加 EnhanceLayerConv2d
-                new_module = en.EnhanceLayerConv2d(module, groups = conv_groups)
+                new_module = en.EnhanceLayerConv2d(module, ops_factor = ops_factor)
                 to_replace.append((name, new_module))
             elif type(module) in reg_dict.custom_linear_layers:
                 # 在 Linear_qn_lsq 层后添加 EnhanceLayerLinear
-                new_module = en.EnhanceLayerLinear(module)
+                new_module = en.EnhanceLayerLinear(module, ops_factor = ops_factor)
                 to_replace.append((name, new_module))
 
         for name, new_module in to_replace:
             self.find_and_replace_module(self.model, name, new_module)
 
-        self.set_device()
+        # self.set_device()
         self.assign_module_name()
 
-    def add_enhance_branch(self, conv_groups = 1, rank_factor = 0.25):
-        to_replace = []
-
-        for name, module in self.model.named_modules():
-            if type(module) in reg_dict.custom_conv_layers:
-                new_module = en.EnhanceBranchConv2d(
-                    original_conv = module,
-                    groups = conv_groups
-                )
-                to_replace.append((name, new_module))
-
-            elif type(module) in reg_dict.custom_linear_layers:
-                new_module = en.EnhanceBranchLinear_LoR(original_linear = module,
-                                                        rank_factor = rank_factor,
-                                                        )
-                to_replace.append((name, new_module))
-
-        for name, new_module in to_replace:
-            self.find_and_replace_module(self.model, name, new_module)
-
-        self.set_device()
-        self.assign_module_name()
+    # def add_enhance_branch(self, ops_factor = 0.05):
+    #     to_replace = []
+    #
+    #     for name, module in self.model.named_modules():
+    #         if type(module) in reg_dict.custom_conv_layers:
+    #             new_module = en.EnhanceBranchConv2d_LoR(
+    #                 original_conv = module,
+    #                 ops_factor = ops_factor
+    #             )
+    #             to_replace.append((name, new_module))
+    #
+    #         elif type(module) in reg_dict.custom_linear_layers:
+    #             new_module = en.EnhanceBranchLinear_LoR(original_linear = module,
+    #                                                     ops_factor = ops_factor,
+    #                                                     )
+    #             to_replace.append((name, new_module))
+    #
+    #     for name, new_module in to_replace:
+    #         self.find_and_replace_module(self.model, name, new_module)
+    #
+    #     self.set_device()
+    #     self.assign_module_name()
 
     def add_enhance_branch_LoR(self,
-                               conv_groups = 1,
-                               rank_factor = 1 / 4,
+                               ops_factor = 0.05,
                                relu = False,
                                sigmoid = True):
         to_replace = []
@@ -933,21 +934,22 @@ class ProgressiveTrain():
                 new_module = en.EnhanceBranchConv2d_LoR(original_conv = module,
                                                         relu = relu,
                                                         sigmoid = sigmoid,
-                                                        groups = conv_groups,
-                                                        rank_factor = rank_factor)
+                                                        ops_factor = ops_factor
+                                                        )
                 to_replace.append((name, new_module))
 
             elif type(module) in reg_dict.custom_linear_layers:
                 new_module = en.EnhanceBranchLinear_LoR(original_linear = module,
                                                         relu = relu,
                                                         sigmoid = sigmoid,
-                                                        rank_factor = rank_factor)
+                                                        ops_factor = ops_factor
+                                                        )
                 to_replace.append((name, new_module))
 
         for name, new_module in to_replace:
             self.find_and_replace_module(self.model, name, new_module)
 
-        self.set_device()
+        # self.set_device()
         self.assign_module_name()
 
     def zero_qn_layers(self):
@@ -1368,9 +1370,9 @@ class ProgressiveTrain():
         self.device_ids = device_ids
         self.model.to(device)
         print(f'set model to device: {device}')
-        if device_ids is not None:
-            self.model = nn.DataParallel(self.model, device_ids = device_ids)
-            print(f'model.device_ids =  {self.model.device_ids}')
+        # if device_ids is not None:
+        #     self.model = nn.DataParallel(self.model, device_ids = device_ids)
+        #     print(f'model.device_ids =  {self.model.device_ids}')
 
     def load_model(self, PATH, strict = True):
         checkpoint = torch.load(PATH, map_location = self.device)
