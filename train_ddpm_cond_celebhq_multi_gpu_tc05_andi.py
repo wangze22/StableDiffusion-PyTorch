@@ -151,6 +151,8 @@ class LDM_AnDi(ProgressiveTrain):
             if 'text' in condition_types:
                 validate_text_config(cfg.condition_config)
                 with torch.no_grad():
+                    # Load tokenizer and text model based on config
+                    # Also get empty text representation
                     text_tokenizer, text_model = get_tokenizer_and_model(
                         cfg.ldm_text_condition_text_embed_model,
                         device = device,
@@ -241,23 +243,9 @@ class LDM_AnDi(ProgressiveTrain):
 
         data_loader = DataLoader(im_dataset, **dataloader_kwargs)
 
-        self.model = Unet(
-            im_channels = cfg.autoencoder_z_channels,
-            model_config = cfg.diffusion_model_config,
-            ).to(device)
-
-        # ema_model = Unet(
-        #     im_channels = cfg.autoencoder_z_channels,
-        #     model_config = cfg.diffusion_model_config,
-        #     ).to(device)
-        # ema_model.load_state_dict(self.model.state_dict())
-        # ema_model.eval()
-        # for param in ema_model.parameters():
-        #     param.requires_grad = False
-
-        self.model.train()
-
-        if distributed:
+        if distributed and not isinstance(self.model, DDP):
+            self.model.to(device)
+            self.model.train()
             self.model = DDP(
                 self.model,
                 device_ids = [local_rank],
@@ -445,9 +433,6 @@ class LDM_AnDi(ProgressiveTrain):
             logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
             print('Done Training ...')
 
-        if distributed and dist.is_initialized():
-            dist.destroy_process_group()
-
 
 
 # =================================================================== #
@@ -462,7 +447,7 @@ timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 num_images = 10
 local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
-num_workers = 4
+num_workers = 0
 model_paths_ldm_ckpt_resume = 'runs_tc05_qn_train_PC/ddpm_20251026-001432_andi/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
 
 # Instantiate the unet model
@@ -522,6 +507,9 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
         num_images = num_images,
         local_rank = rank, backend = backend
         )
+    if dist.is_initialized():
+        dist.destroy_process_group()
+
 
 if __name__ == '__main__':
     if local_rank < 0 and torch.cuda.device_count() > 1:
