@@ -50,8 +50,8 @@ except (RuntimeError, AttributeError):
     # Fallback when the sharing strategy is not supported on the platform.
     pass
 
-_FD_PER_WORKER_ESTIMATE = 4
-_FD_RESERVE = 32
+# _FD_PER_WORKER_ESTIMATE = 4
+# _FD_RESERVE = 32
 
 
 def gen_run_dir(timestamp, train_stage, noise):
@@ -444,11 +444,11 @@ class LDM_AnDi(ProgressiveTrain):
 # Configure launch parameters here; edit as needed before running.
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-num_images = 10
+num_images = 100000
 local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
-num_workers = 0
-model_paths_ldm_ckpt_resume = 'runs_tc05_qn_train_PC/ddpm_20251026-001432_andi/celebhq/ddpm_ckpt_text_image_cond_clip.pth'
+num_workers = 8
+model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251026-055339/LSQ/0.0100/ddpm_ckpt_text_image_cond_clip.pth'
 
 # Instantiate the unet model
 model = Unet(
