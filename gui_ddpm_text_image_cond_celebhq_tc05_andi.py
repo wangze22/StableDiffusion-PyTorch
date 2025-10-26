@@ -31,7 +31,7 @@ import config.andi_config as andi_cfg
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 # Set random seeds for reproducibility
-SEED = 42
+SEED = 11111
 torch.manual_seed(SEED)
 torch.cuda.manual_seed_all(SEED)
 np.random.seed(SEED)
