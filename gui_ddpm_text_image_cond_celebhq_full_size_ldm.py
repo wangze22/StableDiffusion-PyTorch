@@ -766,6 +766,6 @@ def main(ldm_ckpt, vqvae_ckpt):
 if __name__ == '__main__':
     # ------------- Configuration variables -------------
     ldm_ckpt = 'runs/ddpm_20251024-045258_full_size/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
-    vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest.pth'
+    vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
 
     main(ldm_ckpt, vqvae_ckpt)

@@ -12,10 +12,11 @@ environment = 'server' if _gpu_count > 1 else 'local'
 # Dataset path depends on environment
 if environment == 'server':
     dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
-
+    train_vqvae_output_root = 'runs_VQVAE_noise_server'
 else:
     # Use current working directory as data path when running locally
     dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
+    train_vqvae_output_root = 'runs_VQVAE_noise_PC'
 
 # Dataset configuration
 dataset_name = 'celebhq'
@@ -47,18 +48,16 @@ train_perceptual_weight = 1.0
 train_autoencoder_epochs = 100
 train_autoencoder_lr = 1e-5
 # Minimum LR for cosine annealing; if not used explicitly, script falls back to 10% of base LR
-train_autoencoder_min_lr = 1e-6
 
 # Output and checkpoint saving
-train_vqvae_output_root = 'runs'
-train_vqvae_save_every_epochs = 5
+train_vqvae_save_every_epochs = 20
 
 # Model paths
 model_paths_vqvae_autoencoder_ckpt_name = 'vqvae_autoencoder_ckpt.pth'
 model_paths_vqvae_discriminator_ckpt_name = 'vqvae_discriminator_ckpt.pth'
 # Resume checkpoints (set to None to start fresh)
-model_paths_vqvae_autoencoder_ckpt_resume = fr'model_pths/vqvae_autoencoder_ckpt_latest.pth'
-model_paths_vqvae_discriminator_ckpt_resume = fr'model_pths/vqvae_discriminator_ckpt_latest.pth'
+model_paths_vqvae_autoencoder_ckpt_resume = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
+model_paths_vqvae_discriminator_ckpt_resume = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
 
 
 # Assembled model config dict (consumed by models.vqvae.VQVAE)
@@ -97,7 +96,6 @@ train_config = {
     'perceptual_weight': train_perceptual_weight,
     'autoencoder_epochs': train_autoencoder_epochs,
     'autoencoder_lr': train_autoencoder_lr,
-    'autoencoder_min_lr': train_autoencoder_min_lr,
     'vqvae_autoencoder_ckpt_name': model_paths_vqvae_autoencoder_ckpt_name,
     'vqvae_discriminator_ckpt_name': model_paths_vqvae_discriminator_ckpt_name,
 }
