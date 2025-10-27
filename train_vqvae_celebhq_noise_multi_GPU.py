@@ -425,7 +425,13 @@ def train(
 
     if distributed:
         vqvae = DDP(vqvae, device_ids = [local_rank], output_device = local_rank, find_unused_parameters = False)
-        discriminator = DDP(discriminator, device_ids = [local_rank], output_device = local_rank, find_unused_parameters = False)
+        discriminator = DDP(
+            discriminator,
+            device_ids = [local_rank],
+            output_device = local_rank,
+            find_unused_parameters = False,
+            broadcast_buffers = False,
+            )
 
     optimizer_d = Adam(discriminator.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
     optimizer_g = Adam(vqvae.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
@@ -716,10 +722,10 @@ def _distributed_worker(rank: int, world_size: int, train_kwargs: Dict[str, Any]
 
 if __name__ == '__main__':
     # Use defaults from cfg; override by passing args if needed
-    n_scale_range = [0.02, 0.1]
-    n_steps = 4
-    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251027-221426/celebhq/vqvae_autoencoder_ckpt_latest.pth'
-    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251027-221426/celebhq/vqvae_discriminator_ckpt_latest.pth'
+    n_scale_range = [0.05, 0.1]
+    n_steps = 3
+    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-000058/celebhq/vqvae_autoencoder_ckpt_latest.pth'
+    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-000058/celebhq/vqvae_discriminator_ckpt_latest.pth'
     # vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
     # discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
     num_epochs = 200
