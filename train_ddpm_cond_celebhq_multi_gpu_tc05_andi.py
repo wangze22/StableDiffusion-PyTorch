@@ -265,7 +265,7 @@ class LDM_AnDi(ProgressiveTrain):
 
         lr_scheduler = ReduceLROnPlateau(
             optimizer,
-            patience = 30,
+            patience = patience,
             factor = 0.5,
             min_lr = 1e-7,
             )
@@ -449,6 +449,8 @@ local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
 num_workers = 8
 model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip._glfast.pth'
+
+patience = 30
 
 # Instantiate the unet model
 model = Unet(

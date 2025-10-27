@@ -115,14 +115,14 @@ def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -
 
 
 def save_epoch_comparisons(
-        epoch_idx: int,
+        epoch_tag: int,
         samples: List[Tuple[torch.Tensor, torch.Tensor]],
         samples_dir: Path,
         ) -> None:
     if not samples:
         return
 
-    epoch_dir = samples_dir / f'epoch_{epoch_idx + 1:03d}'
+    epoch_dir = samples_dir / f'{epoch_tag}'
     epoch_dir.mkdir(parents = True, exist_ok = True)
 
     limited_samples = samples[:10]
@@ -138,7 +138,7 @@ def save_epoch_comparisons(
     combined = torch.cat([inputs, outputs], dim = 0)
     grid = make_grid(combined, nrow = len(limited_samples))
     img = torchvision.transforms.ToPILImage()(grid)
-    img.save(epoch_dir / f'epoch_{epoch_idx + 1:03d}_comparisons.png')
+    img.save(epoch_dir / f'{epoch_tag}_comparisons.png')
     img.close()
 
 
@@ -196,7 +196,9 @@ def save_weights(
         train_config: Dict[str, str],
         run_artifacts: RunArtifacts,
         epoch_idx: int,
-        ) -> Dict[str, Path]:
+        n_scale,
+        save_epoch: bool = True,
+        ) -> Dict[str, Optional[Path]]:
     base_dir = run_artifacts.run_dir
     ensure_directory(base_dir)
 
@@ -212,15 +214,19 @@ def save_weights(
     torch.save(vqvae.state_dict(), vqvae_base_path)
     torch.save(discriminator.state_dict(), discriminator_base_path)
 
-    checkpoints_dir = run_artifacts.checkpoints_dir
-    ensure_directory(checkpoints_dir)
-    epoch_tag = f'epoch_{epoch_idx + 1:03d}'
+    vqvae_epoch_path: Optional[Path] = None
+    discriminator_epoch_path: Optional[Path] = None
 
-    vqvae_epoch_path = checkpoints_dir / f'{epoch_tag}_{train_config["vqvae_autoencoder_ckpt_name"]}'
-    discriminator_epoch_path = checkpoints_dir / f'{epoch_tag}_{train_config["vqvae_discriminator_ckpt_name"]}'
+    if save_epoch:
+        checkpoints_dir = run_artifacts.checkpoints_dir
+        ensure_directory(checkpoints_dir)
+        epoch_tag = f'epoch_{epoch_idx + 1:03d}'
 
-    torch.save(vqvae.state_dict(), vqvae_epoch_path)
-    torch.save(discriminator.state_dict(), discriminator_epoch_path)
+        vqvae_epoch_path = checkpoints_dir / f'n_scale_{n_scale:.4f}_{epoch_tag}_{train_config["vqvae_autoencoder_ckpt_name"]}'
+        discriminator_epoch_path = checkpoints_dir / f'n_scale_{n_scale:.4f}_{epoch_tag}_{train_config["vqvae_discriminator_ckpt_name"]}'
+
+        torch.save(vqvae.state_dict(), vqvae_epoch_path)
+        torch.save(discriminator.state_dict(), discriminator_epoch_path)
 
     return {
         'vqvae'               : vqvae_epoch_path,
@@ -334,15 +340,12 @@ def train(
     optimizer_g = Adam(vqvae.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
 
     # Learning rate schedulers:
-    # - Generator: ReduceLROnPlateau with patience=5, min_lr = initial_lr * 1e-2
-    # - Discriminator: MultiStepLR milestones at 50% and 75% of total epochs, gamma=0.1
     initial_lr = float(train_config['autoencoder_lr'])
     min_lr_g = initial_lr * 1e-2
-    total_epochs = int(train_config['autoencoder_epochs'])
     # Ensure milestones are >= 1 and strictly increasing
-    milestone1 = max(1, int(round(total_epochs * 0.5)))
-    milestone2 = max(milestone1 + 1, int(round(total_epochs * 0.75)))
-    scheduler_g = ReduceLROnPlateau(optimizer_g, mode = 'min', factor = 0.1, patience = 10, min_lr = min_lr_g)
+    milestone1 = max(1, int(round(num_epochs * 0.5)))
+    milestone2 = max(milestone1 + 1, int(round(num_epochs * 0.75)))
+    scheduler_g = ReduceLROnPlateau(optimizer_g, mode = 'min', factor = 0.5, patience = patience, min_lr = min_lr_g)
     scheduler_d = MultiStepLR(optimizer_d, milestones = [milestone1, milestone2], gamma = 0.1)
 
     disc_step_start = train_config['disc_start']
@@ -383,7 +386,7 @@ def train(
                 step_count += 1
                 im = im.float().to(device)
 
-                output, _, quantize_losses = vqvae(im)
+                output, _, quantize_losses = vqvae(im, n_scale)
 
                 if len(epoch_samples) < 10:
                     remaining = 10 - len(epoch_samples)
@@ -474,11 +477,12 @@ def train(
                     },
                 logs_dir = run_artifacts.logs_dir,
                 )
-            save_epoch_comparisons(epoch_idx, epoch_samples, run_artifacts.samples_dir)
+            epoch_tag = f'n_scale_{n_scale:.4f}_epoch_{epoch_idx + 1:03d}'
+            save_epoch_comparisons(epoch_tag, epoch_samples, run_artifacts.samples_dir)
 
             current_lr = optimizer_g.param_groups[0]['lr']
             logger.info(
-                'Epoch %d/%d | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f | LR: %.6f',
+                'Epoch %d/%d | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f | LR: %.6f | n_scale: %.4f',
                 epoch_idx + 1,
                 num_epochs,
                 epoch_recon_loss,
@@ -488,6 +492,7 @@ def train(
                 epoch_gen_adv_loss,
                 epoch_disc_loss,
                 current_lr,
+                n_scale,
                 )
 
             # Step schedulers: generator uses validation metric (total loss), discriminator steps per epoch
@@ -495,20 +500,28 @@ def train(
             scheduler_d.step()
 
             should_save = ((epoch_idx + 1) % save_every_epochs == 0) or (epoch_idx + 1 == num_epochs)
+            checkpoint_paths = save_weights(
+                vqvae = vqvae,
+                discriminator = discriminator,
+                train_config = train_config,
+                run_artifacts = run_artifacts,
+                epoch_idx = epoch_idx,
+                save_epoch = should_save,
+                n_scale = n_scale,
+                )
             if should_save:
-                checkpoint_paths = save_weights(
-                    vqvae = vqvae,
-                    discriminator = discriminator,
-                    train_config = train_config,
-                    run_artifacts = run_artifacts,
-                    epoch_idx = epoch_idx,
-                    )
                 logger.info(
                     'Saved checkpoints: latest_vqvae=%s latest_disc=%s epoch_vqvae=%s epoch_disc=%s',
                     checkpoint_paths['vqvae_latest'],
                     checkpoint_paths['discriminator_latest'],
                     checkpoint_paths['vqvae'],
                     checkpoint_paths['discriminator'],
+                    )
+            else:
+                logger.info(
+                    'Updated latest checkpoints: latest_vqvae=%s latest_disc=%s',
+                    checkpoint_paths['vqvae_latest'],
+                    checkpoint_paths['discriminator_latest'],
                     )
 
         logger.info(f'Training complete. n_scale = {n_scale}, Artifacts stored in %s', run_artifacts.run_dir)
@@ -521,14 +534,15 @@ if __name__ == '__main__':
     n_steps = 4
     vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
     discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
-    num_epochs = 100
-    num_images = 100000
+    num_epochs = 10
+    num_images = 10
+    patience = 30
     train(
-        num_images  =num_images,
+        num_images = num_images,
         num_epochs = num_epochs,
         n_scale_range = n_scale_range,
         n_steps = n_steps,
-        save_every_epochs = 30,
+        save_every_epochs = 5,
         resume_vqvae_checkpoint = vqvae_checkpoint,
         resume_discriminator_checkpoint = discriminator_checkpoint,
         )

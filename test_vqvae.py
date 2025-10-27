@@ -119,7 +119,8 @@ def main(ckpt_path, OUTPUT_DIR, n_scale):
 
 if __name__ == '__main__':
     # Resolve checkpoint path using training script convention
-    ckpt_path = cfg.model_paths_vqvae_autoencoder_ckpt_resume
+    ckpt_path = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
+    ckpt_path ='runs_VQVAE_noise_PC/vqvae_20251027-201659/celebhq/vqvae_autoencoder_ckpt_latest.pth'
     out_dir = f'VQVAE_samples'
     n_scale = 0.08
     main(ckpt_path, out_dir, n_scale)
