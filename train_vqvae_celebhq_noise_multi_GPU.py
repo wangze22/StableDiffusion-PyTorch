@@ -4,6 +4,7 @@ import os
 import random
 import re
 import sys
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
@@ -100,7 +101,7 @@ def setup_seed(seed: int) -> None:
         torch.cuda.manual_seed_all(seed)
 
 
-def create_run_directories(root: Path) -> RunArtifacts:
+def create_run_directories(root: Path, logger_name: str = 'vqvae_train') -> RunArtifacts:
     run_dir = root
     checkpoints_dir = run_dir / 'checkpoints'
     samples_dir = run_dir / 'samples'
@@ -109,7 +110,7 @@ def create_run_directories(root: Path) -> RunArtifacts:
     for path in (run_dir, checkpoints_dir, samples_dir, logs_dir):
         path.mkdir(parents = True, exist_ok = True)
 
-    logger = logging.getLogger('vqvae_train')
+    logger = logging.getLogger(logger_name)
     logger.setLevel(logging.INFO)
     logger.propagate = False
     if logger.handlers:
@@ -146,20 +147,33 @@ def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -
         writer.writerows(loss_history)
 
     epochs = [item['epoch'] for item in loss_history]
-    plt.figure(figsize = (10, 6))
-    for key in fieldnames:
-        if key == 'epoch' or key == 'total_loss':
-            continue
-        plt.plot(epochs, [item[key] for item in loss_history], label = key)
-    plt.plot(epochs, [item['total_loss'] for item in loss_history], label = 'total_loss', linestyle = '--')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('VQ-VAE Training Losses')
-    plt.legend()
-    plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
-    plt.tight_layout()
-    plt.savefig(logs_dir / 'loss_curve.png')
-    plt.close()
+    total_values = [item['total_loss'] for item in loss_history]
+    component_keys = [key for key in fieldnames if key not in ('epoch', 'total_loss')]
+
+    if component_keys:
+        plt.figure(figsize = (10, 6))
+        for key in component_keys:
+            plt.plot(epochs, [item[key] for item in loss_history], label = key)
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('VQ-VAE Training Component Losses')
+        plt.legend()
+        plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
+        plt.tight_layout()
+        plt.savefig(logs_dir / 'loss_components.png')
+        plt.close()
+
+    if total_values:
+        plt.figure(figsize = (10, 6))
+        plt.plot(epochs, total_values, label = 'total_loss', linestyle = '--')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('VQ-VAE Training Total Loss')
+        plt.legend()
+        plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
+        plt.tight_layout()
+        plt.savefig(logs_dir / 'loss_total.png')
+        plt.close()
 
 
 def save_epoch_comparisons(
@@ -201,8 +215,6 @@ def plot_epoch_losses(
     loss_dir = logs_dir / 'epoch_loss_plots'
     loss_dir.mkdir(parents = True, exist_ok = True)
 
-    plt.figure(figsize = (12, 8))
-    has_data = False
     display_names = {
         'recon_loss'        : 'Reconstruction',
         'perceptual_loss'   : 'Perceptual',
@@ -213,25 +225,36 @@ def plot_epoch_losses(
         'total_loss'        : 'Total',
         }
 
-    for key, values in step_losses.items():
-        if not values:
-            continue
-        steps = np.arange(1, len(values) + 1)
-        plt.plot(steps, values, label = display_names.get(key, key))
-        has_data = True
+    total_key = 'total_loss'
+    component_items = [(key, values) for key, values in step_losses.items() if key != total_key and values]
+    total_values = step_losses.get(total_key, [])
 
-    if not has_data:
+    if component_items:
+        plt.figure(figsize = (12, 8))
+        for key, values in component_items:
+            steps = np.arange(1, len(values) + 1)
+            plt.plot(steps, values, label = display_names.get(key, key))
+        plt.xlabel('Batch')
+        plt.ylabel('Loss')
+        plt.title(f'Epoch {epoch_idx + 1} Component Losses')
+        plt.legend()
+        plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
+        plt.tight_layout()
+        plt.savefig(loss_dir / f'epoch_{epoch_idx + 1:03d}_component_losses.png')
         plt.close()
-        return
 
-    plt.xlabel('Batch')
-    plt.ylabel('Loss')
-    plt.title(f'Epoch {epoch_idx + 1} Losses')
-    plt.legend()
-    plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
-    plt.tight_layout()
-    plt.savefig(loss_dir / f'epoch_{epoch_idx + 1:03d}_losses.png')
-    plt.close()
+    if total_values:
+        plt.figure(figsize = (12, 8))
+        steps = np.arange(1, len(total_values) + 1)
+        plt.plot(steps, total_values, label = display_names.get(total_key, total_key))
+        plt.xlabel('Batch')
+        plt.ylabel('Loss')
+        plt.title(f'Epoch {epoch_idx + 1} Total Loss')
+        plt.legend()
+        plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
+        plt.tight_layout()
+        plt.savefig(loss_dir / f'epoch_{epoch_idx + 1:03d}_total_loss.png')
+        plt.close()
 
 
 def ensure_directory(path: Path) -> None:
@@ -337,11 +360,13 @@ def train(
         resume_discriminator_checkpoint = cfg.model_paths_vqvae_discriminator_ckpt_resume
 
     if is_main_process:
-        run_artifacts = create_run_directories(output_root_path)
-        logger = run_artifacts.logger
+        base_run_artifacts = create_run_directories(output_root_path, logger_name = 'vqvae_train_overview')
+        logger = base_run_artifacts.logger
+        overview_logger = logger
     else:
-        run_artifacts = None
+        base_run_artifacts = None
         logger = _get_logger_for_worker(f'vqvae_train_rank_{rank}')
+        overview_logger = None
 
     if distributed:
         dist.barrier()
@@ -362,8 +387,8 @@ def train(
         }
     train_config['num_workers'] = num_workers
 
-    if is_main_process and run_artifacts is not None:
-        with (run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
+    if is_main_process and base_run_artifacts is not None:
+        with (base_run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
             yaml.safe_dump(
                 {
                     'dataset_params'    : dataset_config,
@@ -373,7 +398,7 @@ def train(
                 snapshot_file,
                 )
         logger.info('Starting VQ-VAE training')
-        logger.info('Run directory: %s', run_artifacts.run_dir)
+        logger.info('Run directory: %s', base_run_artifacts.run_dir)
 
     vqvae = VQVAE(im_channels = dataset_config['im_channels'], model_config = autoencoder_config).to(device)
     lpips_model = LPIPS().eval().to(device)
@@ -446,12 +471,22 @@ def train(
     disc_step_start = train_config['disc_start']
     step_count = 0
 
-    loss_history: List[Dict[str, float]] = []
-
     for scale_idx, n_scale in enumerate(n_list):
+        current_run_artifacts: Optional[RunArtifacts] = None
+        loss_history: List[Dict[str, float]] = []
+        if is_main_process:
+            scale_root_base = base_run_artifacts.run_dir if base_run_artifacts is not None else output_root_path
+            scale_root = scale_root_base / f'n_scale_{n_scale:.4f}'
+            current_run_artifacts = create_run_directories(
+                scale_root,
+                logger_name = f'vqvae_train_n_scale_{n_scale:.4f}',
+                )
+            logger = current_run_artifacts.logger
+            logger.info('Starting training for n_scale: %.4f', n_scale)
         for epoch_idx in range(num_epochs):
+            epoch_start_time = time.time()
             use_gan = epoch_idx >= disc_step_start
-            print(f'USE_GAN = {use_gan}')
+            # print(f'USE_GAN = {use_gan}')
             if distributed and train_sampler is not None:
                 sampler_epoch = scale_idx * num_epochs + epoch_idx
                 train_sampler.set_epoch(sampler_epoch)
@@ -618,7 +653,7 @@ def train(
 
             current_lr = optimizer_g.param_groups[0]['lr']
 
-            if is_main_process and run_artifacts is not None:
+            if is_main_process and current_run_artifacts is not None:
                 loss_entry = {
                     'epoch'             : epoch_idx + 1,
                     'recon_loss'        : epoch_recon_loss,
@@ -630,7 +665,7 @@ def train(
                     'total_loss'        : epoch_total_loss,
                     }
                 loss_history.append(loss_entry)
-                persist_loss_history(loss_history, run_artifacts.logs_dir)
+                persist_loss_history(loss_history, current_run_artifacts.logs_dir)
                 plot_epoch_losses(
                     epoch_idx = epoch_idx,
                     step_losses = {
@@ -642,10 +677,10 @@ def train(
                         'discriminator_loss': discriminator_losses,
                         'total_loss'        : total_losses,
                         },
-                    logs_dir = run_artifacts.logs_dir,
+                    logs_dir = current_run_artifacts.logs_dir,
                     )
                 epoch_tag = f'n_scale_{n_scale:.4f}_epoch_{epoch_idx + 1:03d}'
-                save_epoch_comparisons(epoch_tag, epoch_samples, run_artifacts.samples_dir)
+                save_epoch_comparisons(epoch_tag, epoch_samples, current_run_artifacts.samples_dir)
                 logger.info(
                     'Epoch %d/%d | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f | LR: %.6f | n_scale: %.4f',
                     epoch_idx + 1,
@@ -665,7 +700,7 @@ def train(
                     vqvae = vqvae,
                     discriminator = discriminator,
                     train_config = train_config,
-                    run_artifacts = run_artifacts,
+                    run_artifacts = current_run_artifacts,
                     epoch_idx = epoch_idx,
                     save_epoch = should_save,
                     n_scale = n_scale,
@@ -685,6 +720,15 @@ def train(
                         checkpoint_paths['discriminator_latest'],
                         )
 
+                epoch_duration_minutes = (time.time() - epoch_start_time) / 60.0
+                logger.info(
+                    'Epoch %d/%d completed in %.2f minutes at n_scale %.4f',
+                    epoch_idx + 1,
+                    num_epochs,
+                    epoch_duration_minutes,
+                    n_scale,
+                    )
+
             scheduler_g.step(epoch_total_loss)
             if use_gan:
                 scheduler_d.step()
@@ -692,14 +736,19 @@ def train(
             if distributed:
                 dist.barrier()
 
-        if is_main_process and run_artifacts is not None:
-            logger.info('Training complete. n_scale = %s, Artifacts stored in %s', f'{n_scale:.4f}', run_artifacts.run_dir)
+        if is_main_process and current_run_artifacts is not None:
+            logger.info(
+                'Training complete. n_scale = %s, Artifacts stored in %s',
+                f'{n_scale:.4f}',
+                current_run_artifacts.run_dir,
+                )
 
     if distributed:
         dist.barrier()
 
-    if is_main_process and run_artifacts is not None:
-        logger.info('All training complete. Artifacts stored in %s', run_artifacts.run_dir)
+    if is_main_process and base_run_artifacts is not None:
+        final_logger = overview_logger if overview_logger is not None else base_run_artifacts.logger
+        final_logger.info('All training complete. Artifacts stored in %s', base_run_artifacts.run_dir)
 
 
 def _distributed_worker(rank: int, world_size: int, train_kwargs: Dict[str, Any]) -> None:
@@ -723,7 +772,7 @@ def _distributed_worker(rank: int, world_size: int, train_kwargs: Dict[str, Any]
 if __name__ == '__main__':
     # Use defaults from cfg; override by passing args if needed
     n_scale_range = [0.05, 0.1]
-    n_steps = 3
+    n_steps = 2
     vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-000058/celebhq/vqvae_autoencoder_ckpt_latest.pth'
     discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-000058/celebhq/vqvae_discriminator_ckpt_latest.pth'
     # vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
