@@ -444,6 +444,8 @@ def train(
 
     for scale_idx, n_scale in enumerate(n_list):
         for epoch_idx in range(num_epochs):
+            use_gan = epoch_idx >= disc_step_start
+            print(f'USE_GAN = {use_gan}')
             if distributed and train_sampler is not None:
                 sampler_epoch = scale_idx * num_epochs + epoch_idx
                 train_sampler.set_epoch(sampler_epoch)
@@ -506,7 +508,6 @@ def train(
                 perceptual_loss = train_config['perceptual_weight'] * lpips_loss
 
                 adv_loss = torch.tensor(0.0, device = device)
-                use_gan = step_count > disc_step_start
                 if use_gan:
                     disc_fake_pred = discriminator(output)
                     disc_fake_loss = disc_criterion(
@@ -556,8 +557,6 @@ def train(
                     disc_loss = train_config['disc_weight'] * (disc_fake_loss + disc_real_loss) * 0.5
                     disc_loss.backward()
                     discriminator_losses.append(disc_loss.item())
-
-
 
                 if gradients_are_finite(unwrap_model(vqvae).parameters()) and gradients_are_finite(unwrap_model(discriminator).parameters()):
                     optimizer_g.step()
@@ -681,7 +680,8 @@ def train(
                         )
 
             scheduler_g.step(epoch_total_loss)
-            scheduler_d.step()
+            if use_gan:
+                scheduler_d.step()
 
             if distributed:
                 dist.barrier()
@@ -718,8 +718,10 @@ if __name__ == '__main__':
     # Use defaults from cfg; override by passing args if needed
     n_scale_range = [0.02, 0.1]
     n_steps = 4
-    vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
-    discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
+    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251027-221426/celebhq/vqvae_autoencoder_ckpt_latest.pth'
+    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251027-221426/celebhq/vqvae_discriminator_ckpt_latest.pth'
+    # vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
+    # discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
     num_epochs = 200
     num_images = 1000000
     patience = 30
