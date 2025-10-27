@@ -76,13 +76,13 @@ autoencoder_num_up_layers = 2
 train_seed = 1111
 train_task_name = 'celebhq'
 train_ldm_batch_size = 28
-train_ldm_epochs = 100
+train_ldm_epochs = 500
 train_num_samples = 1
 train_num_grid_rows = 1
-train_ldm_lr = 1e-5
+train_ldm_lr = 2e-5
 train_save_latents = True
 train_vqvae_latent_dir_name = 'vqvae_latents_22'
-train_ldm_save_every_epochs = 20
+train_ldm_save_every_epochs = 30
 
 # Model paths
 model_paths_ldm_ckpt_name = 'ddpm_ckpt_text_image_cond_clip.pth'

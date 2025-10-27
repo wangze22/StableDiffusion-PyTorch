@@ -776,8 +776,9 @@ if __name__ == '__main__':
     ldm_ckpt = 'runs_tc05/ddpm_20251024-132839/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ/0.0100/ddpm_ckpt_text_image_cond_clip.pth'
-    ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0500/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip._glfast.pth'
     vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest.pth'
 
     model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
@@ -790,10 +791,10 @@ if __name__ == '__main__':
         output_bit = 8,
         weight_bit = 4,
         )
-    trainer.add_enhance_branch_LoR(
-        ops_factor = 0.05,
-        )
-    trainer.add_enhance_layers(ops_factor = 0.05)
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)
