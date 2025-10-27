@@ -313,6 +313,7 @@ def train(
         num_workers: int = 0,
         local_rank: int = -1,
         backend: Optional[str] = None,
+        patience = None,
         ):
     n_list = torch.linspace(n_scale_range[0], n_scale_range[1], n_steps)
     backend = backend or DEFAULT_BACKEND
@@ -368,9 +369,9 @@ def train(
                     'dataset_params'    : dataset_config,
                     'autoencoder_params': autoencoder_config,
                     'train_params'      : train_config,
-                },
+                    },
                 snapshot_file,
-            )
+                )
         logger.info('Starting VQ-VAE training')
         logger.info('Run directory: %s', run_artifacts.run_dir)
 
@@ -409,7 +410,7 @@ def train(
         pin_memory = True,
         persistent_workers = num_workers > 0,
         drop_last = False,
-    )
+        )
 
     recon_criterion = torch.nn.MSELoss()
     disc_criterion = torch.nn.MSELoss()
@@ -469,14 +470,16 @@ def train(
                 'total_sum' : 0.0,
                 'gen_count' : 0.0,
                 'disc_count': 0.0,
-            }
+                }
 
             data_iterator = tqdm(
                 data_loader,
                 desc = f'Epoch {epoch_idx + 1}/{num_epochs}',
                 leave = False,
-            ) if is_main_process else data_loader
+                ) if is_main_process else data_loader
 
+            optimizer_g.zero_grad(set_to_none = True)
+            optimizer_d.zero_grad(set_to_none = True)
             for batch in data_iterator:
                 if isinstance(batch, (list, tuple)):
                     im = batch[0]
@@ -485,11 +488,6 @@ def train(
 
                 step_count += 1
                 im = im.float().to(device, non_blocking = True)
-
-                use_gan = step_count > disc_step_start
-
-                optimizer_g.zero_grad(set_to_none = True)
-                optimizer_d.zero_grad(set_to_none = True)
 
                 output, _, quantize_losses = vqvae(im, n_scale)
 
@@ -508,31 +506,17 @@ def train(
                 perceptual_loss = train_config['perceptual_weight'] * lpips_loss
 
                 adv_loss = torch.tensor(0.0, device = device)
+                use_gan = step_count > disc_step_start
                 if use_gan:
                     disc_fake_pred = discriminator(output)
                     disc_fake_loss = disc_criterion(
                         disc_fake_pred,
                         torch.ones_like(disc_fake_pred, device = disc_fake_pred.device),
-                    )
+                        )
                     adv_loss = train_config['disc_weight'] * disc_fake_loss
 
                 total_generator_loss = recon_loss + codebook_loss + commitment_loss + perceptual_loss + adv_loss
-
-                if not torch.isfinite(total_generator_loss):
-                    if is_main_process:
-                        logger.warning('Skipping step %d due to non-finite generator loss', step_count)
-                    continue
-
                 total_generator_loss.backward()
-
-                if not gradients_are_finite(unwrap_model(vqvae).parameters()):
-                    if is_main_process:
-                        logger.warning('Skipping optimizer_g.step() at step %d due to non-finite gradients', step_count)
-                    optimizer_g.zero_grad(set_to_none = True)
-                    optimizer_d.zero_grad(set_to_none = True)
-                    continue
-
-                optimizer_g.step()
 
                 recon_value = recon_loss.item()
                 codebook_value = codebook_loss.item()
@@ -564,30 +548,30 @@ def train(
                     disc_fake_loss = disc_criterion(
                         disc_fake_pred,
                         torch.zeros_like(disc_fake_pred, device = disc_fake_pred.device),
-                    )
+                        )
                     disc_real_loss = disc_criterion(
                         disc_real_pred,
                         torch.ones_like(disc_real_pred, device = disc_real_pred.device),
-                    )
+                        )
                     disc_loss = train_config['disc_weight'] * (disc_fake_loss + disc_real_loss) * 0.5
+                    disc_loss.backward()
+                    discriminator_losses.append(disc_loss.item())
 
-                    if torch.isfinite(disc_loss):
-                        disc_loss.backward()
-                        if gradients_are_finite(unwrap_model(discriminator).parameters()):
-                            optimizer_d.step()
-                            disc_loss_value = disc_loss.item()
-                            epoch_metrics['disc_sum'] += disc_loss_value
-                            epoch_metrics['disc_count'] += 1.0
-                            if is_main_process:
-                                discriminator_losses.append(disc_loss_value)
-                        else:
-                            if is_main_process:
-                                logger.warning('Skipping discriminator.step() at step %d due to non-finite gradients', step_count)
-                    else:
-                        if is_main_process:
-                            logger.warning('Skipping discriminator update at step %d due to non-finite loss', step_count)
 
-                optimizer_d.zero_grad(set_to_none = True)
+
+                if gradients_are_finite(unwrap_model(vqvae).parameters()) and gradients_are_finite(unwrap_model(discriminator).parameters()):
+                    optimizer_g.step()
+                    optimizer_g.zero_grad(set_to_none = True)
+                    if use_gan:
+                        optimizer_d.step()
+                        optimizer_d.zero_grad(set_to_none = True)
+                else:
+                    if is_main_process:
+                        logger.warning('Skipping optimizer_g.step() at step %d due to non-finite gradients', step_count)
+                    optimizer_g.zero_grad(set_to_none = True)
+                    optimizer_d.zero_grad(set_to_none = True)
+                    continue
+
 
             metrics_tensor = torch.tensor(
                 [
@@ -600,10 +584,10 @@ def train(
                     epoch_metrics['total_sum'],
                     epoch_metrics['gen_count'],
                     epoch_metrics['disc_count'],
-                ],
+                    ],
                 dtype = torch.float64,
                 device = device,
-            )
+                )
             if distributed:
                 dist.all_reduce(metrics_tensor, op = dist.ReduceOp.SUM)
             (
@@ -616,7 +600,7 @@ def train(
                 total_sum,
                 gen_count,
                 disc_count,
-            ) = metrics_tensor.tolist()
+                ) = metrics_tensor.tolist()
 
             gen_count = max(gen_count, 1.0)
             epoch_recon_loss = float(recon_sum / gen_count)
@@ -639,7 +623,7 @@ def train(
                     'generator_adv_loss': epoch_gen_adv_loss,
                     'discriminator_loss': epoch_disc_loss,
                     'total_loss'        : epoch_total_loss,
-                }
+                    }
                 loss_history.append(loss_entry)
                 persist_loss_history(loss_history, run_artifacts.logs_dir)
                 plot_epoch_losses(
@@ -652,9 +636,9 @@ def train(
                         'generator_adv_loss': generator_adv_losses,
                         'discriminator_loss': discriminator_losses,
                         'total_loss'        : total_losses,
-                    },
+                        },
                     logs_dir = run_artifacts.logs_dir,
-                )
+                    )
                 epoch_tag = f'n_scale_{n_scale:.4f}_epoch_{epoch_idx + 1:03d}'
                 save_epoch_comparisons(epoch_tag, epoch_samples, run_artifacts.samples_dir)
                 logger.info(
@@ -669,7 +653,7 @@ def train(
                     epoch_disc_loss,
                     current_lr,
                     n_scale,
-                )
+                    )
 
                 should_save = ((epoch_idx + 1) % save_every_epochs == 0) or (epoch_idx + 1 == num_epochs)
                 checkpoint_paths = save_weights(
@@ -680,7 +664,7 @@ def train(
                     epoch_idx = epoch_idx,
                     save_epoch = should_save,
                     n_scale = n_scale,
-                )
+                    )
                 if should_save:
                     logger.info(
                         'Saved checkpoints: latest_vqvae=%s latest_disc=%s epoch_vqvae=%s epoch_disc=%s',
@@ -688,13 +672,13 @@ def train(
                         checkpoint_paths['discriminator_latest'],
                         checkpoint_paths['vqvae'],
                         checkpoint_paths['discriminator'],
-                    )
+                        )
                 else:
                     logger.info(
                         'Updated latest checkpoints: latest_vqvae=%s latest_disc=%s',
                         checkpoint_paths['vqvae_latest'],
                         checkpoint_paths['discriminator_latest'],
-                    )
+                        )
 
             scheduler_g.step(epoch_total_loss)
             scheduler_d.step()
@@ -736,24 +720,26 @@ if __name__ == '__main__':
     n_steps = 4
     vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
     discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
-    num_epochs = 10
-    num_images = 10
+    num_epochs = 200
+    num_images = 1000000
     patience = 30
     num_workers = 8
     backend = DEFAULT_BACKEND
     local_rank_env = int(os.environ.get('LOCAL_RANK', -1))
+    print(f'num_epochs = {num_epochs}')
 
     common_train_kwargs: Dict[str, Any] = {
-        'num_images'                    : num_images,
-        'num_epochs'                    : num_epochs,
-        'n_scale_range'                 : n_scale_range,
-        'n_steps'                       : n_steps,
-        'save_every_epochs'             : 5,
-        'resume_vqvae_checkpoint'       : vqvae_checkpoint,
+        'num_images'                     : num_images,
+        'num_epochs'                     : num_epochs,
+        'n_scale_range'                  : n_scale_range,
+        'n_steps'                        : n_steps,
+        'save_every_epochs'              : 5,
+        'resume_vqvae_checkpoint'        : vqvae_checkpoint,
         'resume_discriminator_checkpoint': discriminator_checkpoint,
-        'num_workers'                   : num_workers,
-        'backend'                       : backend,
-    }
+        'num_workers'                    : num_workers,
+        'backend'                        : backend,
+        'patience'                       : patience
+        }
 
     if local_rank_env < 0 and torch.cuda.device_count() > 1:
         world_size = torch.cuda.device_count()
@@ -762,6 +748,6 @@ if __name__ == '__main__':
             args = (world_size, common_train_kwargs),
             nprocs = world_size,
             join = True,
-        )
+            )
     else:
         train(local_rank = local_rank_env, **common_train_kwargs)
