@@ -251,7 +251,6 @@ def train(
         save_every_epochs: Optional[int] = None,
         resume_vqvae_checkpoint: Optional[str] = None,
         resume_discriminator_checkpoint: Optional[str] = None,
-        train_imgs: Optional[int] = None,
         num_epochs = 100,
         n_scale_range = [0.0, 0.05],
         n_steps = 3,
@@ -315,15 +314,10 @@ def train(
         im_size = dataset_config['im_size'],
         im_channels = dataset_config['im_channels'],
         )
-    if num_images is not None:
+    if num_images is not None and num_images > 0 and num_images < len(im_dataset):
         max_samples = min(num_images, len(im_dataset))
         im_dataset = Subset(im_dataset, range(max_samples))
-
-    if train_imgs is not None and train_imgs > 0:
-        limit = min(train_imgs, len(im_dataset))
-        indices = torch.randperm(len(im_dataset))[:limit].tolist()
-        im_dataset = torch.utils.data.Subset(im_dataset, indices)
-        logger.info('Limiting dataset to %d images for training/debug.', limit)
+        logger.info('Limiting dataset to %d images for training/debug.', max_samples)
 
     data_loader = DataLoader(
         im_dataset,
@@ -532,8 +526,8 @@ if __name__ == '__main__':
     # Use defaults from cfg; override by passing args if needed
     n_scale_range = [0.02, 0.1]
     n_steps = 4
-    vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
-    discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
+    vqvae_checkpoint = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
+    discriminator_checkpoint = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_discriminator_ckpt_latest.pth'
     num_epochs = 10
     num_images = 10
     patience = 30

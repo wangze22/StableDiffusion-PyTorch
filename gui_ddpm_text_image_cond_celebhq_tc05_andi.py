@@ -998,6 +998,13 @@ if __name__ == '__main__':
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-141224/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
 
+    # 参数4 (效果似乎好一点)
+    # 先使用未加噪的 vae 生成的 vqvae_latents_28 训练 ldm
+    # ldm cfg drop = 0.5
+    # 然后再训练加噪的 vae
+    ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-195206/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
+
     model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
     trainer = ProgressiveTrain(model)
     trainer.convert_to_layers(
