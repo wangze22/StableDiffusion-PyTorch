@@ -266,6 +266,7 @@ class MaskPainterGUI:
         # State
         self.current_class_id = 1  # default to 'skin'
         self.brush_radius = 6
+        self.tool_mode = 'brush'  # 'brush' or 'liquify'
         self.is_generating = False
         # Painting state
         self.last_paint_pos: Optional[Tuple[int, int]] = None
@@ -304,6 +305,8 @@ class MaskPainterGUI:
         self.btn_clear_mask.pack(side = tk.LEFT, padx = 2)
         self.btn_refresh_mask = tk.Button(btns_frame, text = 'Refresh Mask', command = self.refresh_current_mask)
         self.btn_refresh_mask.pack(side = tk.LEFT, padx = 2)
+        self.btn_toggle_tool = tk.Button(btns_frame, text = 'Switch to Liquify (L)', command = self.toggle_tool_mode)
+        self.btn_toggle_tool.pack(side = tk.LEFT, padx = 2)
 
         # Second row: prompt input
         self.prompt_var = tk.StringVar()
@@ -367,6 +370,9 @@ class MaskPainterGUI:
         # Undo/Redo shortcuts
         self.master.bind('<Control-z>', self.on_undo)
         self.master.bind('<Control-y>', self.on_redo)
+        # Tool toggle shortcut
+        self.master.bind('l', self.on_toggle_tool_key)
+        self.master.bind('L', self.on_toggle_tool_key)
 
         # Palette and brush preview placed under the mask canvas
         self.palette_frame = tk.Frame(self.canvas_holder)
@@ -437,23 +443,70 @@ class MaskPainterGUI:
 
     def set_brush_class(self, class_id: int):
         self.current_class_id = class_id
-        if class_id == 0:
-            self.status_var.set('Brush: background')
-        else:
-            self.status_var.set(f'Brush: {label_list[class_id - 1]}')
+        if self.tool_mode == 'brush' and hasattr(self, 'status_var'):
+            if class_id == 0:
+                self.status_var.set('Brush: background')
+            else:
+                self.status_var.set(f'Brush: {label_list[class_id - 1]}')
+        self.update_brush_info_label()
+        self.update_brush_preview()
+
+    def toggle_tool_mode(self):
+        target_mode = 'liquify' if self.tool_mode == 'brush' else 'brush'
+        self.set_tool_mode(target_mode)
+
+    def on_toggle_tool_key(self, event = None):
+        focus_widget = self.master.focus_get()
+        try:
+            if focus_widget is not None and focus_widget.winfo_class() == 'Entry':
+                return
+        except Exception:
+            pass
+        self.toggle_tool_mode()
+        return 'break'
+
+    def set_tool_mode(self, mode: str):
+        if mode not in ('brush', 'liquify'):
+            return
+        if mode == self.tool_mode:
+            return
+        self.tool_mode = mode
+        # Reset drag state whenever mode switches
+        self.last_paint_pos = None
+        if hasattr(self, 'btn_toggle_tool'):
+            if mode == 'brush':
+                self.btn_toggle_tool.config(text = 'Switch to Liquify (L)')
+            else:
+                self.btn_toggle_tool.config(text = 'Switch to Brush (L)')
+        if hasattr(self, 'status_var'):
+            if mode == 'brush':
+                self.status_var.set('Mode: Brush (paint classes)')
+            else:
+                self.status_var.set('Mode: Liquify (warp mask)')
         self.update_brush_info_label()
         self.update_brush_preview()
 
     def on_paint(self, event):
         x, y = int(event.x), int(event.y)
-        # Draw continuous stroke by interpolating between last and current positions
+        if self.tool_mode == 'brush':
+            # Draw continuous stroke by interpolating between last and current positions
+            if self.last_paint_pos is None:
+                self._paint_circle_at(x, y)
+            else:
+                lx, ly = self.last_paint_pos
+                self._paint_line(lx, ly, x, y)
+            self.last_paint_pos = (x, y)
+            # Throttle refresh to ~60 FPS
+            self._schedule_refresh()
+            return
+
+        # Liquify mode
         if self.last_paint_pos is None:
-            self._paint_circle_at(x, y)
-        else:
-            lx, ly = self.last_paint_pos
-            self._paint_line(lx, ly, x, y)
+            self.last_paint_pos = (x, y)
+            return
+        lx, ly = self.last_paint_pos
+        self._liquify_line(lx, ly, x, y)
         self.last_paint_pos = (x, y)
-        # Throttle refresh to ~60 FPS
         self._schedule_refresh()
 
     def refresh_mask_image(self):
@@ -486,6 +539,54 @@ class MaskPainterGUI:
             yi = int(round(y0 + t * dy))
             self._paint_circle_at(xi, yi)
 
+    def _apply_liquify(self, cx: int, cy: int, dx: float, dy: float):
+        if dx == 0 and dy == 0:
+            return
+        r = self.brush_radius
+        if r <= 0:
+            return
+        x0 = max(0, cx - r)
+        x1 = min(self.w, cx + r + 1)
+        y0 = max(0, cy - r)
+        y1 = min(self.h, cy + r + 1)
+        if x0 >= x1 or y0 >= y1:
+            return
+        region = self.class_map[y0:y1, x0:x1]
+        source = region.copy()
+        grid_y, grid_x = np.mgrid[y0:y1, x0:x1]
+        dist = np.sqrt((grid_x - cx) ** 2 + (grid_y - cy) ** 2)
+        radius = float(r)
+        if radius <= 0:
+            return
+        falloff = np.clip(1.0 - dist / radius, 0.0, 1.0)
+        influence = falloff > 0
+        if not np.any(influence):
+            return
+        src_x = grid_x - dx * falloff
+        src_y = grid_y - dy * falloff
+        local_src_x = np.clip(np.rint(src_x - x0), 0, region.shape[1] - 1).astype(np.int32)
+        local_src_y = np.clip(np.rint(src_y - y0), 0, region.shape[0] - 1).astype(np.int32)
+        local_dest_x = (grid_x - x0).astype(np.int32)
+        local_dest_y = (grid_y - y0).astype(np.int32)
+        region[local_dest_y[influence], local_dest_x[influence]] = source[local_src_y[influence], local_src_x[influence]]
+        self.class_map[y0:y1, x0:x1] = region
+
+    def _liquify_line(self, x0: int, y0: int, x1: int, y1: int):
+        dx = x1 - x0
+        dy = y1 - y0
+        dist = (dx * dx + dy * dy) ** 0.5
+        step = max(1.0, self.brush_radius * 0.5)
+        steps = max(1, int(dist / step))
+        prev_x, prev_y = x0, y0
+        for s in range(1, steps + 1):
+            t = s / steps
+            cx = int(round(x0 + t * dx))
+            cy = int(round(y0 + t * dy))
+            disp_x = cx - prev_x
+            disp_y = cy - prev_y
+            self._apply_liquify(cx, cy, disp_x, disp_y)
+            prev_x, prev_y = cx, cy
+
     def _schedule_refresh(self):
         if not self._refresh_scheduled:
             self._refresh_scheduled = True
@@ -499,9 +600,11 @@ class MaskPainterGUI:
     def on_button_press(self, event):
         # Save state before starting a new stroke for proper Undo
         self.push_history()
-        self.last_paint_pos = (int(event.x), int(event.y))
-        self._paint_circle_at(self.last_paint_pos[0], self.last_paint_pos[1])
-        self._schedule_refresh()
+        x, y = int(event.x), int(event.y)
+        self.last_paint_pos = (x, y)
+        if self.tool_mode == 'brush':
+            self._paint_circle_at(x, y)
+            self._schedule_refresh()
 
     def on_button_release(self, event):
         # Ensure final refresh after stroke ends
@@ -509,11 +612,18 @@ class MaskPainterGUI:
         self._do_refresh()
 
     def update_brush_info_label(self):
+        if self.tool_mode == 'liquify':
+            self.brush_info_var.set(f'Mode: Liquify | radius: {self.brush_radius}px')
+            try:
+                self.brush_label_var.set('Current: Liquify')
+            except Exception:
+                pass
+            return
         if self.current_class_id == 0:
             cls_name = 'background'
         else:
             cls_name = label_list[self.current_class_id - 1]
-        self.brush_info_var.set(f'Brush: {cls_name} | size: {self.brush_radius}px')
+        self.brush_info_var.set(f'Mode: Brush | class: {cls_name} | size: {self.brush_radius}px')
         # Sync the preview label with current brush label
         try:
             self.brush_label_var.set(f'Current: {cls_name}')
@@ -530,6 +640,22 @@ class MaskPainterGUI:
         r = max(1, min(r, min(cx, cy) - 4))
         # Background
         self.brush_preview.create_rectangle(0, 0, W, H, fill = '#f0f0f0', outline = '')
+        if self.tool_mode == 'liquify':
+            outline = '#1f77b4'
+            self.brush_preview.create_oval(cx - r, cy - r, cx + r, cy + r, outline = outline, width = 2)
+            arrow_len = max(12, r)
+            self.brush_preview.create_line(
+                cx - arrow_len * 0.6,
+                cy,
+                cx + arrow_len * 0.6,
+                cy,
+                fill = outline,
+                width = 2,
+                arrow = tk.LAST,
+            )
+            self.brush_preview.create_text(cx, cy - 12, text = 'Liquify', fill = outline, font = ('Arial', 11, 'bold'))
+            self.brush_preview.create_text(cx, cy + 14, text = f'{self.brush_radius}px', fill = outline, font = ('Arial', 10))
+            return
         # Circle color uses current class palette color for better intuition
         color_idx = max(0, min(self.current_class_id, len(palette) - 1))
         r_col, g_col, b_col = palette[color_idx]
