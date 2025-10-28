@@ -81,7 +81,7 @@ train_num_samples = 1
 train_num_grid_rows = 1
 train_ldm_lr = 2e-5
 train_save_latents = True
-train_vqvae_latent_dir_name = 'vqvae_latents_22'
+train_vqvae_latent_dir_name = 'vqvae_latents_28'
 train_ldm_save_every_epochs = 30
 
 # Model paths

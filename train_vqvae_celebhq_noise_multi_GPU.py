@@ -338,6 +338,7 @@ def train(
         backend: Optional[str] = None,
         patience = None,
         scheduler_threshold: Optional[float] = 1e-5,
+        lr = 1e-5
         ):
     n_list = torch.linspace(n_scale_range[0], n_scale_range[1], n_steps)
     backend = backend or DEFAULT_BACKEND
@@ -468,8 +469,8 @@ def train(
             broadcast_buffers = False,
             )
 
-    optimizer_d = Adam(discriminator.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
-    optimizer_g = Adam(vqvae.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
+    optimizer_d = Adam(discriminator.parameters(), lr = lr, betas = (0.5, 0.999))
+    optimizer_g = Adam(vqvae.parameters(), lr = lr, betas = (0.5, 0.999))
 
     initial_lr = float(train_config['autoencoder_lr'])
     min_lr_g = initial_lr * 1e-3
@@ -809,6 +810,7 @@ if __name__ == '__main__':
     num_epochs = 200
     num_images = 1000000
     patience = 20
+    lr = 5e-6
     scheduler_threshold = 1e-5
     num_workers = 8
     backend = DEFAULT_BACKEND
@@ -827,6 +829,7 @@ if __name__ == '__main__':
         'backend'                        : backend,
         'patience'                       : patience,
         'scheduler_threshold'            : scheduler_threshold,
+        'lr':lr,
         }
 
     if local_rank_env < 0 and torch.cuda.device_count() > 1:

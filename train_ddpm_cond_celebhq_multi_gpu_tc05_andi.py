@@ -266,6 +266,7 @@ class LDM_AnDi(ProgressiveTrain):
         lr_scheduler = ReduceLROnPlateau(
             optimizer,
             patience = patience,
+            threshold = threshold,
             factor = 0.5,
             min_lr = 1e-7,
             )
@@ -444,13 +445,17 @@ class LDM_AnDi(ProgressiveTrain):
 # Configure launch parameters here; edit as needed before running.
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-num_images = 100000
+num_images = 1000000
 local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
+
+# 4卡的话 num_workers 最多 8个，否则内存会不足
 num_workers = 8
-model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip._glfast.pth'
+model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-135851/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+
 
 patience = 30
+threshold = 1e-6
 
 # Instantiate the unet model
 model = Unet(
@@ -533,3 +538,5 @@ if __name__ == '__main__':
             )
     else:
         pass
+
+
