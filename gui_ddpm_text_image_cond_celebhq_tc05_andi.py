@@ -290,15 +290,13 @@ class MaskPainterGUI:
         self.root_frame = tk.Frame(master)
         self.root_frame.pack(fill = tk.BOTH, expand = True)
 
-        self.left_frame = tk.Frame(self.root_frame)
-        self.left_frame.pack(side = tk.LEFT, fill = tk.BOTH, expand = True)
+        # Controls bar shown above canvases
+        self.top_controls = tk.Frame(self.root_frame)
+        self.top_controls.pack(side = tk.TOP, anchor = 'nw', fill = tk.X, padx = 6, pady = 6)
 
-        self.right_frame = tk.Frame(self.root_frame)
-        self.right_frame.pack(side = tk.RIGHT, fill = tk.BOTH, expand = True)
-
-        # Top-left row: action buttons
-        btns_frame = tk.Frame(self.left_frame)
-        btns_frame.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
+        # Action buttons row
+        btns_frame = tk.Frame(self.top_controls)
+        btns_frame.pack(side = tk.TOP, anchor = 'w', pady = 2)
         self.btn_random_prompt = tk.Button(btns_frame, text = 'Random Prompt', command = self.load_random_prompt)
         self.btn_random_prompt.pack(side = tk.LEFT, padx = 2)
         self.btn_random_mask = tk.Button(btns_frame, text = 'Random Mask', command = self.load_random_mask)
@@ -312,12 +310,12 @@ class MaskPainterGUI:
 
         # Second row: prompt input
         self.prompt_var = tk.StringVar()
-        self.prompt_entry = tk.Entry(self.left_frame, textvariable = self.prompt_var, width = 60)
-        self.prompt_entry.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
+        self.prompt_entry = tk.Entry(self.top_controls, textvariable = self.prompt_var, width = 60)
+        self.prompt_entry.pack(side = tk.TOP, anchor = 'w', pady = 4)
 
         # Third row: cf_guidance_scale, num_inference_steps, method, eta inputs
-        cf_frame = tk.Frame(self.left_frame)
-        cf_frame.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
+        cf_frame = tk.Frame(self.top_controls)
+        cf_frame.pack(side = tk.TOP, anchor = 'w', pady = 2)
         tk.Label(cf_frame, text = 'CF Guidance Scale:').pack(side = tk.LEFT, padx = 2)
         self.cf_guidance_scale_var = tk.DoubleVar(value = 1.0)
         self.cf_guidance_scale_entry = tk.Entry(cf_frame, textvariable = self.cf_guidance_scale_var, width = 8)
@@ -350,8 +348,10 @@ class MaskPainterGUI:
         self.row_align.pack(side = tk.TOP, anchor = 'nw', padx = 6, pady = 6)
         self.canvas_holder = tk.Frame(self.row_align)
         self.canvas_holder.pack(side = tk.LEFT, anchor = 'nw')
-        self.image_holder = tk.Frame(self.row_align)
-        self.image_holder.pack(side = tk.LEFT, anchor = 'nw', padx = 6)
+        self.right_panel = tk.Frame(self.row_align)
+        self.right_panel.pack(side = tk.LEFT, anchor = 'nw', padx = 6)
+        self.image_holder = tk.Frame(self.right_panel)
+        self.image_holder.pack(side = tk.TOP, anchor = 'nw')
 
         # Canvas for mask (placed inside the left holder)
         self.canvas = tk.Canvas(self.canvas_holder, width = self.w, height = self.h, bg = 'black')
@@ -382,16 +382,14 @@ class MaskPainterGUI:
         self.build_palette_buttons()
 
         # Right panel: generated image and controls
-        self.generate_btn = tk.Button(self.right_frame, text = 'Generate', command = self.on_generate, width = 20, height = 2)
-        self.generate_btn.pack(side = tk.TOP, pady = 6)
-
-        self.status_var = tk.StringVar()
-        self.status_var.set('Ready')
-        self.status_label = tk.Label(self.right_frame, textvariable = self.status_var)
-        self.status_label.pack(side = tk.TOP, pady = 2)
-
         self.image_panel = tk.Label(self.image_holder)
         self.image_panel.pack(side = tk.TOP)
+        self.generate_btn = tk.Button(self.right_panel, text = 'Generate', command = self.on_generate, width = 20, height = 2)
+        self.generate_btn.pack(side = tk.TOP, pady = 6)
+        self.status_var = tk.StringVar()
+        self.status_var.set('Ready')
+        self.status_label = tk.Label(self.right_panel, textvariable = self.status_var)
+        self.status_label.pack(side = tk.TOP, pady = 2)
 
         # Initialize with a random mask; prompt will match the same image
         self.load_random_mask()
