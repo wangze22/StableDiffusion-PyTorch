@@ -451,7 +451,7 @@ backend = DEFAULT_BACKEND
 
 # 4卡的话 num_workers 最多 8个，否则内存会不足
 num_workers = 8
-model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-135851/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-141224_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
 
 
 patience = 30
