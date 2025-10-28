@@ -1,4 +1,4 @@
-import threading
+﻿import threading
 import time
 from dataclasses import dataclass
 from importlib import import_module
@@ -58,7 +58,7 @@ palette: List[Tuple[int, int, int]] = [
     (255, 0, 0),  # mouth
     (255, 140, 0),  # u_lip
     (178, 34, 34),  # l_lip
-    (50, 50, 50),  # hair (dark gray) — distinguishable from background
+    (50, 50, 50),  # hair (dark gray) 鈥?distinguishable from background
     (128, 0, 128),  # hat
     (255, 0, 255),  # ear_r (ear ring)
     (173, 216, 230),  # neck_l
@@ -266,7 +266,9 @@ class MaskPainterGUI:
         # State
         self.current_class_id = 1  # default to 'skin'
         self.brush_radius = 6
-        self.tool_mode = 'brush'  # 'brush' or 'liquify'
+        self.tool_mode = 'brush'  # brush or liquify
+        self.liquify_strength = 0.85
+        self.liquify_min_influence = 0.05
         self.is_generating = False
         # Painting state
         self.last_paint_pos: Optional[Tuple[int, int]] = None
@@ -443,7 +445,7 @@ class MaskPainterGUI:
 
     def set_brush_class(self, class_id: int):
         self.current_class_id = class_id
-        if self.tool_mode == 'brush' and hasattr(self, 'status_var'):
+        if self.tool_mode == 'brush':
             if class_id == 0:
                 self.status_var.set('Brush: background')
             else:
@@ -452,8 +454,8 @@ class MaskPainterGUI:
         self.update_brush_preview()
 
     def toggle_tool_mode(self):
-        target_mode = 'liquify' if self.tool_mode == 'brush' else 'brush'
-        self.set_tool_mode(target_mode)
+        target = 'liquify' if self.tool_mode == 'brush' else 'brush'
+        self.set_tool_mode(target)
 
     def on_toggle_tool_key(self, event = None):
         focus_widget = self.master.focus_get()
@@ -471,7 +473,6 @@ class MaskPainterGUI:
         if mode == self.tool_mode:
             return
         self.tool_mode = mode
-        # Reset drag state whenever mode switches
         self.last_paint_pos = None
         if hasattr(self, 'btn_toggle_tool'):
             if mode == 'brush':
@@ -489,18 +490,16 @@ class MaskPainterGUI:
     def on_paint(self, event):
         x, y = int(event.x), int(event.y)
         if self.tool_mode == 'brush':
-            # Draw continuous stroke by interpolating between last and current positions
             if self.last_paint_pos is None:
                 self._paint_circle_at(x, y)
             else:
                 lx, ly = self.last_paint_pos
                 self._paint_line(lx, ly, x, y)
             self.last_paint_pos = (x, y)
-            # Throttle refresh to ~60 FPS
             self._schedule_refresh()
             return
 
-        # Liquify mode
+        # Liquify path
         if self.last_paint_pos is None:
             self.last_paint_pos = (x, y)
             return
@@ -539,6 +538,31 @@ class MaskPainterGUI:
             yi = int(round(y0 + t * dy))
             self._paint_circle_at(xi, yi)
 
+    def _compute_liquify_falloff(self, dist: np.ndarray, radius: float) -> np.ndarray:
+        if radius <= 1:
+            falloff = np.zeros_like(dist, dtype = np.float32)
+            falloff[dist <= radius] = 1.0
+            return falloff
+        feather_width = max(1.0, radius * 1)
+        core_radius = max(0.0, radius - feather_width)
+        falloff = np.zeros_like(dist, dtype = np.float32)
+        if core_radius > 0:
+            core_mask = dist <= core_radius
+            falloff[core_mask] = 1.0
+        else:
+            core_radius = 0.0
+        transition_mask = (dist > core_radius) & (dist < radius)
+        if np.any(transition_mask):
+            rng = radius - core_radius
+            if rng <= 0:
+                falloff[dist < radius] = 1.0
+            else:
+                t = (dist[transition_mask] - core_radius) / rng
+                t = np.clip(t, 0.0, 1.0)
+                smooth = t * t * (3.0 - 2.0 * t)
+                falloff[transition_mask] = 1.0 - smooth
+        return falloff.astype(np.float32, copy = False)
+
     def _apply_liquify(self, cx: int, cy: int, dx: float, dy: float):
         if dx == 0 and dy == 0:
             return
@@ -556,25 +580,45 @@ class MaskPainterGUI:
         grid_y, grid_x = np.mgrid[y0:y1, x0:x1]
         dist = np.sqrt((grid_x - cx) ** 2 + (grid_y - cy) ** 2)
         radius = float(r)
-        if radius <= 0:
-            return
-        falloff = np.clip(1.0 - dist / radius, 0.0, 1.0)
-        influence = falloff > 0
+        falloff = self._compute_liquify_falloff(dist, radius)
+        influence = falloff > self.liquify_min_influence
         if not np.any(influence):
             return
+        max_disp = radius * 0.75
+        disp_mag = (dx * dx + dy * dy) ** 0.5
+        if disp_mag > max_disp and disp_mag > 0:
+            scale = max_disp / disp_mag
+            dx *= scale
+            dy *= scale
+        dx *= self.liquify_strength
+        dy *= self.liquify_strength
         src_x = grid_x - dx * falloff
         src_y = grid_y - dy * falloff
         local_src_x = np.clip(np.rint(src_x - x0), 0, region.shape[1] - 1).astype(np.int32)
         local_src_y = np.clip(np.rint(src_y - y0), 0, region.shape[0] - 1).astype(np.int32)
         local_dest_x = (grid_x - x0).astype(np.int32)
         local_dest_y = (grid_y - y0).astype(np.int32)
-        region[local_dest_y[influence], local_dest_x[influence]] = source[local_src_y[influence], local_src_x[influence]]
+        upd_y = local_dest_y[influence]
+        upd_x = local_dest_x[influence]
+        src_vals = source[local_src_y[influence], local_src_x[influence]]
+        region[upd_y, upd_x] = src_vals
+        # Soft smooth on boundary to avoid seams
+        boundary_mask = (falloff > 0.0) & (falloff < 0.6)
+        if np.any(boundary_mask):
+            padded = np.pad(region, 1, mode = 'edge')
+            by, bx = np.where(boundary_mask)
+            for yy, xx in zip(by, bx):
+                window = padded[yy:yy + 3, xx:xx + 3]
+                vals, counts = np.unique(window, return_counts = True)
+                region[yy, xx] = vals[np.argmax(counts)]
         self.class_map[y0:y1, x0:x1] = region
 
     def _liquify_line(self, x0: int, y0: int, x1: int, y1: int):
         dx = x1 - x0
         dy = y1 - y0
         dist = (dx * dx + dy * dy) ** 0.5
+        if dist == 0:
+            return
         step = max(1.0, self.brush_radius * 0.5)
         steps = max(1, int(dist / step))
         prev_x, prev_y = x0, y0
@@ -613,7 +657,10 @@ class MaskPainterGUI:
 
     def update_brush_info_label(self):
         if self.tool_mode == 'liquify':
-            self.brush_info_var.set(f'Mode: Liquify | radius: {self.brush_radius}px')
+            feather_radius = max(1, int(round(self.brush_radius * 0.5)))
+            self.brush_info_var.set(
+                f'Mode: Liquify | radius: {self.brush_radius}px | feather radius: {feather_radius}px'
+            )
             try:
                 self.brush_label_var.set('Current: Liquify')
             except Exception:
@@ -624,7 +671,6 @@ class MaskPainterGUI:
         else:
             cls_name = label_list[self.current_class_id - 1]
         self.brush_info_var.set(f'Mode: Brush | class: {cls_name} | size: {self.brush_radius}px')
-        # Sync the preview label with current brush label
         try:
             self.brush_label_var.set(f'Current: {cls_name}')
         except Exception:
@@ -642,7 +688,11 @@ class MaskPainterGUI:
         self.brush_preview.create_rectangle(0, 0, W, H, fill = '#f0f0f0', outline = '')
         if self.tool_mode == 'liquify':
             outline = '#1f77b4'
+            inner_r = max(1, int(round(self.brush_radius * 0.5)))
             self.brush_preview.create_oval(cx - r, cy - r, cx + r, cy + r, outline = outline, width = 2)
+            self.brush_preview.create_oval(
+                cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r, outline = outline, width = 1, dash = (4, 3)
+            )
             arrow_len = max(12, r)
             self.brush_preview.create_line(
                 cx - arrow_len * 0.6,
@@ -653,8 +703,12 @@ class MaskPainterGUI:
                 width = 2,
                 arrow = tk.LAST,
             )
-            self.brush_preview.create_text(cx, cy - 12, text = 'Liquify', fill = outline, font = ('Arial', 11, 'bold'))
-            self.brush_preview.create_text(cx, cy + 14, text = f'{self.brush_radius}px', fill = outline, font = ('Arial', 10))
+            self.brush_preview.create_text(
+                cx, cy - 12, text = 'Liquify', fill = outline, font = ('Arial', 11, 'bold')
+            )
+            self.brush_preview.create_text(
+                cx, cy + 14, text = f'{self.brush_radius}px', fill = outline, font = ('Arial', 10)
+            )
             return
         # Circle color uses current class palette color for better intuition
         color_idx = max(0, min(self.current_class_id, len(palette) - 1))
@@ -927,9 +981,24 @@ if __name__ == '__main__':
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0500/ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip._glfast.pth'
+
+    # 参数1
+    # 先使用未加噪的 vae 生成的 vqvae_latents_22 训练 ldm
+    # 然后再训练加噪的 vae
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251027-171338_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
-    # vqvae_ckpt = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_autoencoder_ckpt_latest.pth'
+
+    # 参数2
+    # 使用加噪的 vae 生成的 vqvae_latents_28 训练 ldm
+    # 使用相同的 vae 模型进行生成
+    ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-141224/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_autoencoder_ckpt_latest.pth'
+
+    # 参数3
+    # 先使用未加噪的 vae 生成的 vqvae_latents_28 训练 ldm
+    # 然后再训练加噪的 vae
+    ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-141224/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
 
     model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
     trainer = ProgressiveTrain(model)
@@ -948,3 +1017,4 @@ if __name__ == '__main__':
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)
+

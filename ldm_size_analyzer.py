@@ -5,7 +5,7 @@ os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 
 import torch
 
-import config.celebhq_text_image_cond as cfg
+import config.celebhq_text_image_cond_tc05 as cfg
 from cim_weight_mapper.weight_process import map_weight_for_model
 from models.unet_cond_celebhq import Unet
 from cim_weight_mapper.weight_mapper import *

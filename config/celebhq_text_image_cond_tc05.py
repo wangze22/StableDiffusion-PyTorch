@@ -52,12 +52,12 @@ ldm_condition_types = ['text', 'image']
 ldm_text_condition_text_embed_model = 'clip'
 ldm_text_condition_train_text_embed_model = False
 ldm_text_condition_text_embed_dim = 512
-ldm_text_condition_cond_drop_prob = 0.1
+ldm_text_condition_cond_drop_prob = 0.5
 ldm_image_condition_input_channels = 18
 ldm_image_condition_output_channels = 3
 ldm_image_condition_h = 512
 ldm_image_condition_w = 512
-ldm_image_condition_cond_drop_prob = 0.1
+ldm_image_condition_cond_drop_prob = 0.5
 
 # Autoencoder configuration
 autoencoder_z_channels = 4
