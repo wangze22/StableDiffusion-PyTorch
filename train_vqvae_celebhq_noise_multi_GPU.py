@@ -337,6 +337,7 @@ def train(
         local_rank: int = -1,
         backend: Optional[str] = None,
         patience = None,
+        scheduler_threshold: Optional[float] = 1e-5,
         ):
     n_list = torch.linspace(n_scale_range[0], n_scale_range[1], n_steps)
     backend = backend or DEFAULT_BACKEND
@@ -386,6 +387,15 @@ def train(
         'discriminator': resume_discriminator_checkpoint,
         }
     train_config['num_workers'] = num_workers
+    if patience is None:
+        patience = int(train_config.get('scheduler_patience', 20))
+    else:
+        train_config['scheduler_patience'] = patience
+
+    if scheduler_threshold is None:
+        scheduler_threshold = float(train_config.get('scheduler_threshold', 1e-5))
+    else:
+        train_config['scheduler_threshold'] = scheduler_threshold
 
     if is_main_process and base_run_artifacts is not None:
         with (base_run_artifacts.logs_dir / 'config_snapshot.yaml').open('w') as snapshot_file:
@@ -465,7 +475,15 @@ def train(
     min_lr_g = initial_lr * 1e-3
     milestone1 = max(1, int(round(num_epochs * 0.5)))
     milestone2 = max(milestone1 + 1, int(round(num_epochs * 0.75)))
-    scheduler_g = ReduceLROnPlateau(optimizer_g, mode = 'min', factor = 0.5, patience = patience, min_lr = min_lr_g)
+    scheduler_g = ReduceLROnPlateau(
+        optimizer_g,
+        mode = 'min',
+        factor = 0.5,
+        patience = patience,
+        threshold = scheduler_threshold,
+        threshold_mode = 'abs',
+        min_lr = min_lr_g,
+        )
     scheduler_d = MultiStepLR(optimizer_d, milestones = [milestone1, milestone2], gamma = 0.1)
 
     disc_step_start = train_config['disc_start']
@@ -782,15 +800,16 @@ def _distributed_worker(rank: int, world_size: int, train_kwargs: Dict[str, Any]
 
 if __name__ == '__main__':
     # Use defaults from cfg; override by passing args if needed
-    n_scale_range = [0.05, 0.1]
+    n_scale_range = [0.1, 0.2]
     n_steps = 2
-    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-011824/celebhq/n_scale_0.0500/vqvae_autoencoder_ckpt_latest.pth'
-    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-011824/celebhq/n_scale_0.0500/vqvae_discriminator_ckpt_latest.pth'
+    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_autoencoder_ckpt_latest.pth'
+    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_discriminator_ckpt_latest.pth'
     # vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
     # discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
     num_epochs = 200
     num_images = 1000000
     patience = 20
+    scheduler_threshold = 1e-5
     num_workers = 8
     backend = DEFAULT_BACKEND
     local_rank_env = int(os.environ.get('LOCAL_RANK', -1))
@@ -801,12 +820,13 @@ if __name__ == '__main__':
         'num_epochs'                     : num_epochs,
         'n_scale_range'                  : n_scale_range,
         'n_steps'                        : n_steps,
-        'save_every_epochs'              : 5,
+        'save_every_epochs'              : 20,
         'resume_vqvae_checkpoint'        : vqvae_checkpoint,
         'resume_discriminator_checkpoint': discriminator_checkpoint,
         'num_workers'                    : num_workers,
         'backend'                        : backend,
-        'patience'                       : patience
+        'patience'                       : patience,
+        'scheduler_threshold'            : scheduler_threshold,
         }
 
     if local_rank_env < 0 and torch.cuda.device_count() > 1:
