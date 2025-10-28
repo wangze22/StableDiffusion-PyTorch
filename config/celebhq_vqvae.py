@@ -46,7 +46,7 @@ train_codebook_weight = 1.0
 train_commitment_beta = 0.2
 train_perceptual_weight = 1.0
 train_autoencoder_epochs = 100
-train_autoencoder_lr = 1e-5
+train_autoencoder_lr = 2e-5
 # Minimum LR for cosine annealing; if not used explicitly, script falls back to 10% of base LR
 
 # Output and checkpoint saving

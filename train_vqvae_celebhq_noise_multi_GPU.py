@@ -462,7 +462,7 @@ def train(
     optimizer_g = Adam(vqvae.parameters(), lr = train_config['autoencoder_lr'], betas = (0.5, 0.999))
 
     initial_lr = float(train_config['autoencoder_lr'])
-    min_lr_g = initial_lr * 1e-2
+    min_lr_g = initial_lr * 1e-3
     milestone1 = max(1, int(round(num_epochs * 0.5)))
     milestone2 = max(milestone1 + 1, int(round(num_epochs * 0.75)))
     scheduler_g = ReduceLROnPlateau(optimizer_g, mode = 'min', factor = 0.5, patience = patience, min_lr = min_lr_g)
@@ -575,6 +575,16 @@ def train(
                 epoch_metrics['total_sum'] += total_value
                 epoch_metrics['gen_count'] += 1.0
 
+                # Update tqdm with running average loss for current epoch
+                if is_main_process:
+                    avg_loss = epoch_metrics['total_sum'] / max(1.0, epoch_metrics['gen_count'])
+                    try:
+                        data_iterator.set_postfix({
+                            'avg_loss': f"{avg_loss:.4f}"
+                        })
+                    except Exception:
+                        pass
+
                 if is_main_process:
                     recon_losses.append(recon_value)
                     codebook_losses.append(codebook_value)
@@ -682,9 +692,10 @@ def train(
                 epoch_tag = f'n_scale_{n_scale:.4f}_epoch_{epoch_idx + 1:03d}'
                 save_epoch_comparisons(epoch_tag, epoch_samples, current_run_artifacts.samples_dir)
                 logger.info(
-                    'Epoch %d/%d | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f | LR: %.6f | n_scale: %.4f',
+                    'Epoch %d/%d | Tot: %.4f | Recon: %.4f | Perc: %.4f | Codebook: %.4f | Commit: %.4f | G_adv: %.4f | D: %.4f | LR: %.4e | n_scale: %.4f',
                     epoch_idx + 1,
                     num_epochs,
+                    epoch_total_loss,
                     epoch_recon_loss,
                     epoch_perc_loss,
                     epoch_codebook_loss,
@@ -773,13 +784,13 @@ if __name__ == '__main__':
     # Use defaults from cfg; override by passing args if needed
     n_scale_range = [0.05, 0.1]
     n_steps = 2
-    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-000058/celebhq/vqvae_autoencoder_ckpt_latest.pth'
-    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-000058/celebhq/vqvae_discriminator_ckpt_latest.pth'
+    vqvae_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-011824/celebhq/n_scale_0.0500/vqvae_autoencoder_ckpt_latest.pth'
+    discriminator_checkpoint = '/home/SD_pytorch/runs_VQVAE_noise_server/vqvae_20251028-011824/celebhq/n_scale_0.0500/vqvae_discriminator_ckpt_latest.pth'
     # vqvae_checkpoint = 'model_pths/vqvae_autoencoder_ckpt_latest_converged.pth'
     # discriminator_checkpoint = 'model_pths/vqvae_discriminator_ckpt_latest_converged.pth'
     num_epochs = 200
     num_images = 1000000
-    patience = 30
+    patience = 20
     num_workers = 8
     backend = DEFAULT_BACKEND
     local_rank_env = int(os.environ.get('LOCAL_RANK', -1))
