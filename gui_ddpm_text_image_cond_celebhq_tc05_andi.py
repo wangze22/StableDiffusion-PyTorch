@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import messagebox
 
 import torch
+import torch.nn as nn
 import torchvision
 from torchvision.utils import make_grid
 
@@ -138,29 +139,50 @@ def sample_with_mask_and_prompt(
         empty_text_embed = get_text_representation(empty_prompt, text_tokenizer, text_model, device)
 
     # Prepare cond inputs
-    cond_input = {'text': text_prompt_embed, 'image': mask_oh.to(device)}
-    uncond_input = {'text': empty_text_embed, 'image': torch.zeros_like(mask_oh).to(device)}
+    mask_oh = mask_oh.to(device)
+    cond_input = {'text': text_prompt_embed, 'image': mask_oh}
+    uncond_input = {'text': empty_text_embed, 'image': torch.zeros_like(mask_oh)}
+    guidance_scale = float(cf_guidance_scale)
     num_inference_steps = max(2, min(num_inference_steps, cfg.diffusion_num_timesteps - 1))
 
-    T_list = torch.linspace(cfg.diffusion_num_timesteps - 1, 0, num_inference_steps, dtype = torch.long)
-    assert T_list[-1] == 0, 'Last timestep must be zero.'
-    # Sampling loop
-    with torch.no_grad():
-        xt = sampler.forward(
-            xt,
-            cond_input,
-            uncond_input,
-            steps=num_inference_steps,
-            method=method,
-            eta=eta,
-        )
-        # Decode final latent
-        ims = vae.decode(xt)
-        ims = torch.clamp(ims, -1., 1.).detach().cpu()
-        ims = (ims + 1) / 2
-        grid = make_grid(ims, nrow = 1)
-        img = torchvision.transforms.ToPILImage()(grid)
+    class _GuidedModelWrapper(nn.Module):
+        def __init__(self, base_model, uncond_input, guidance_scale):
+            super().__init__()
+            self.base_model = base_model
+            self.uncond_input = uncond_input
+            self.guidance_scale = guidance_scale
+
+        def forward(self, x_t, t, cond_input):
+            scale = max(0.0, float(self.guidance_scale))
+            if scale == 0.0:
+                return self.base_model(x_t, t, self.uncond_input)
+            noise_cond = self.base_model(x_t, t, cond_input)
+            if abs(scale - 1.0) < 1e-6:
+                return noise_cond
+            noise_uncond = self.base_model(x_t, t, self.uncond_input)
+            return noise_uncond + scale * (noise_cond - noise_uncond)
+
+    original_model = sampler.model
+    sampler.model = _GuidedModelWrapper(original_model, uncond_input, guidance_scale)
+    try:
+        with torch.no_grad():
+            xt = sampler.forward(
+                xt,
+                cond_input,
+                uncond_input,
+                steps=num_inference_steps,
+                method=method,
+                eta=eta,
+            )
+            # Decode final latent
+            ims = vae.decode(xt)
+            ims = torch.clamp(ims, -1., 1.).detach().cpu()
+            ims = (ims + 1) / 2
+            grid = make_grid(ims, nrow = 1)
+            img = torchvision.transforms.ToPILImage()(grid)
         return img
+    finally:
+        sampler.model = original_model
 
 
 # ------------- Model bundle -------------
