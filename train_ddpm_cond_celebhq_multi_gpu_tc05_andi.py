@@ -451,7 +451,7 @@ backend = DEFAULT_BACKEND
 
 # 4卡的话 num_workers 最多 8个，否则内存会不足
 num_workers = 8
-model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-141224_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+# model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-141224_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
 
 
 patience = 30
@@ -462,27 +462,12 @@ model = Unet(
     im_channels = cfg.autoencoder_z_channels,
     model_config = cfg.diffusion_model_config,
     )
+andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
 
-trainer.convert_to_layers(
-    convert_layer_type_list = reg_dict.nn_layers,
-    tar_layer_type = 'layers_qn_lsq',
-    noise_scale = 0.08,
-    input_bit = 8,
-    output_bit = 8,
-    weight_bit = 4,
-    )
 
-andi_cfg.train_stage = 'LSQ'
-
-andi_cfg.train_stage = 'LSQ_AnDi'
-trainer.add_enhance_branch_LoR(
-    ops_factor = 0.05,
-    )
-
-trainer.add_enhance_layers(ops_factor = 0.05)
-trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
+# trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
 
 
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
@@ -492,35 +477,57 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
     os.environ['WORLD_SIZE'] = str(world_size)
     os.environ['RANK'] = str(rank)
     os.environ['LOCAL_RANK'] = str(rank)
-    # trainer.progressive_train(
-    #     qn_cycle = andi_cfg.qn_cycle,
-    #     update_layer_type_list = ['layers_qn_lsq'],
-    #     start_cycle = 0,
-    #     weight_bit_range = andi_cfg.qn_weight_bit_range,
-    #     input_bit_range = andi_cfg.qn_feature_bit_range,
-    #     output_bit_range = andi_cfg.qn_feature_bit_range,
-    #     noise_scale_range = andi_cfg.qn_noise_range,
-    #     num_workers = num_workers,
-    #     num_images = num_images,
-    #     local_rank = rank, backend = backend
-    #     )
+
     trainer.train_model(
         num_workers = num_workers,
         num_images = num_images,
         local_rank = rank, backend = backend,
         )
-    # trainer.progressive_train(
-    #     qn_cycle = andi_cfg.qna_cycle,
-    #     update_layer_type_list = ['layers_qn_lsq'],
-    #     start_cycle = 0,
-    #     weight_bit_range = andi_cfg.qna_weight_bit_range,
-    #     input_bit_range = andi_cfg.qna_feature_bit_range,
-    #     output_bit_range = andi_cfg.qna_feature_bit_range,
-    #     noise_scale_range = andi_cfg.qna_noise_range,
-    #     num_workers = num_workers,
-    #     num_images = num_images,
-    #     local_rank = rank, backend = backend,
-    #     )
+
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.nn_layers,
+        tar_layer_type = 'layers_qn_lsq',
+        noise_scale = andi_cfg.qn_noise_range[0],
+        input_bit = andi_cfg.qn_feature_bit_range[0],
+        output_bit = andi_cfg.qn_feature_bit_range[0],
+        weight_bit = andi_cfg.qn_weight_bit_range[0],
+        )
+
+    andi_cfg.train_stage = 'LSQ'
+
+    trainer.progressive_train(
+        qn_cycle = andi_cfg.qn_cycle,
+        update_layer_type_list = ['layers_qn_lsq'],
+        start_cycle = 0,
+        weight_bit_range = andi_cfg.qn_weight_bit_range,
+        input_bit_range = andi_cfg.qn_feature_bit_range,
+        output_bit_range = andi_cfg.qn_feature_bit_range,
+        noise_scale_range = andi_cfg.qn_noise_range,
+        num_workers = num_workers,
+        num_images = num_images,
+        local_rank = rank, backend = backend,
+        )
+
+
+    andi_cfg.train_stage = 'LSQ_AnDi'
+    trainer.add_enhance_branch_LoR(
+        ops_factor = 0.05,
+        )
+    trainer.add_enhance_layers(ops_factor = 0.05)
+
+    trainer.progressive_train(
+        qn_cycle = andi_cfg.qna_cycle,
+        update_layer_type_list = ['layers_qn_lsq'],
+        start_cycle = 0,
+        weight_bit_range = andi_cfg.qna_weight_bit_range,
+        input_bit_range = andi_cfg.qna_feature_bit_range,
+        output_bit_range = andi_cfg.qna_feature_bit_range,
+        noise_scale_range = andi_cfg.qna_noise_range,
+        num_workers = num_workers,
+        num_images = num_images,
+        local_rank = rank, backend = backend,
+        )
+
     if dist.is_initialized():
         dist.destroy_process_group()
 
@@ -538,5 +545,3 @@ if __name__ == '__main__':
             )
     else:
         pass
-
-

@@ -31,10 +31,10 @@ class CustomMultiheadAttention(nn.Module):
         self.head_dim = embed_dim // num_heads
         self.batch_first = batch_first
 
-        self.q_proj = Linear_temp(embed_dim, embed_dim, bias=bias)
-        self.k_proj = Linear_temp(embed_dim, embed_dim, bias=bias)
-        self.v_proj = Linear_temp(embed_dim, embed_dim, bias=bias)
-        self.out_proj = Linear_temp(embed_dim, embed_dim, bias=bias)
+        self.q_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.k_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.v_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
+        self.out_proj = nn.Linear(embed_dim, embed_dim, bias=bias)
         self.dropout = nn.Dropout(dropout) if dropout > 0.0 else nn.Identity()
         self.scaling = 1.0 / math.sqrt(self.head_dim)
 

@@ -35,14 +35,14 @@ diffusion_beta_start = 0.00085
 diffusion_beta_end = 0.012
 
 # Latent diffusion model configuration
-ldm_down_channels = [256 // c_factor, 384 // c_factor, 512 // c_factor, 512 // c_factor]
-ldm_mid_channels = [512 // c_factor, 512 // c_factor]
+ldm_down_channels = [int(256 // c_factor), int(384 // c_factor), int(512 // c_factor), int(768 // c_factor)]
+ldm_mid_channels = [int(768 // c_factor), int(512 // c_factor)]
 ldm_down_sample = [True, True, True]
 ldm_attn_down = [True, True, True]
-ldm_time_emb_dim = 512 // c_factor
-ldm_norm_channels = 32 // c_factor
+ldm_time_emb_dim = int(512 // c_factor)
+ldm_norm_channels = int(32 // c_factor)
 ldm_num_heads = 16
-ldm_conv_out_channels = 128 // c_factor
+ldm_conv_out_channels = int(128 // c_factor)
 ldm_num_down_layers = 2
 ldm_num_mid_layers = 2
 ldm_num_up_layers = 2
