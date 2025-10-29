@@ -1,4 +1,6 @@
-c_factor = 2
+from config.ldm_scaling import build_ldm_scaling
+
+c_factor = 2.58
 
 # Dataset configuration
 dataset_name = 'celebhq'
@@ -35,14 +37,16 @@ diffusion_beta_start = 0.00085
 diffusion_beta_end = 0.012
 
 # Latent diffusion model configuration
-ldm_down_channels = [int(256 // c_factor), int(384 // c_factor), int(512 // c_factor), int(768 // c_factor)]
-ldm_mid_channels = [int(768 // c_factor), int(512 // c_factor)]
+ldm_scaling = build_ldm_scaling(c_factor=c_factor)
+print(ldm_scaling)
+ldm_down_channels = ldm_scaling['down_channels']
+ldm_mid_channels = ldm_scaling['mid_channels']
 ldm_down_sample = [True, True, True]
 ldm_attn_down = [True, True, True]
-ldm_time_emb_dim = int(512 // c_factor)
-ldm_norm_channels = int(32 // c_factor)
-ldm_num_heads = 16
-ldm_conv_out_channels = int(128 // c_factor)
+ldm_time_emb_dim = ldm_scaling['time_emb_dim']
+ldm_norm_channels = ldm_scaling['norm_channels']
+ldm_num_heads = ldm_scaling['num_heads']
+ldm_conv_out_channels = ldm_scaling['conv_out_channels']
 ldm_num_down_layers = 2
 ldm_num_mid_layers = 2
 ldm_num_up_layers = 2
