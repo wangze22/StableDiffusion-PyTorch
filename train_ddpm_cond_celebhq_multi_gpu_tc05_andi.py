@@ -445,7 +445,7 @@ class LDM_AnDi(ProgressiveTrain):
 # Configure launch parameters here; edit as needed before running.
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-num_images = 1000000
+num_images = 10
 local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
 
@@ -469,7 +469,7 @@ trainer = LDM_AnDi(model = model)
 
 # trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
 
-
+base_epochs = 500
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
     """Configure per-process environment and launch distributed training worker."""
     os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
@@ -478,6 +478,8 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
     os.environ['RANK'] = str(rank)
     os.environ['LOCAL_RANK'] = str(rank)
 
+    cfg.train_ldm_epochs = base_epochs
+    # FP 训练
     trainer.train_model(
         num_workers = num_workers,
         num_images = num_images,
@@ -493,8 +495,9 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
         weight_bit = andi_cfg.qn_weight_bit_range[0],
         )
 
+    # LSQ 训练
     andi_cfg.train_stage = 'LSQ'
-
+    cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
     trainer.progressive_train(
         qn_cycle = andi_cfg.qn_cycle,
         update_layer_type_list = ['layers_qn_lsq'],
@@ -508,13 +511,13 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
         local_rank = rank, backend = backend,
         )
 
-
+    # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
     trainer.add_enhance_branch_LoR(
         ops_factor = 0.05,
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
-
+    cfg.train_ldm_epochs = base_epochs
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,
         update_layer_type_list = ['layers_qn_lsq'],

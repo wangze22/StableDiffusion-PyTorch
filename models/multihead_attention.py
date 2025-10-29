@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-class Linear_temp(nn.Linear):
-    pass
+# class Linear_temp(nn.Linear):
+#     pass
 
 class CustomMultiheadAttention(nn.Module):
     """

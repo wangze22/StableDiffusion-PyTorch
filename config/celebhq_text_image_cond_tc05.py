@@ -22,12 +22,12 @@ environment = 'server' if _gpu_count > 1 else 'local'
 if environment == 'server':
     dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
     model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05/ddpm_20251024-132839/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
-    train_ldm_output_root = 'runs_tc05_qn_train_server'
+    train_ldm_output_root = 'runs_tc05_qkv_qn_train_server'
 else:
     # Use current working directory as data path when running locally
     dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
     model_paths_ldm_ckpt_resume = 'runs_tc05/ddpm_20251024-132839/celebhq/ema_ddpm_ckpt_text_image_cond_clip.pth'
-    train_ldm_output_root = 'runs_tc05_qn_train_PC'
+    train_ldm_output_root = 'runs_tc05_qkv_qn_train_PC'
 dataset_im_channels = 3
 dataset_im_size = 256
 
@@ -85,7 +85,7 @@ train_num_samples = 1
 train_num_grid_rows = 1
 train_ldm_lr = 2e-5
 train_save_latents = True
-train_vqvae_latent_dir_name = 'vqvae_latents_28'
+train_vqvae_latent_dir_name = 'vqvae_latents_29'
 train_ldm_save_every_epochs = 30
 
 # Model paths

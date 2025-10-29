@@ -21,7 +21,7 @@ else:
 # Dataset configuration
 dataset_name = 'celebhq'
 dataset_im_channels = 3
-dataset_im_size = 512
+dataset_im_size = 256
 
 # Autoencoder (VQ-VAE) configuration
 autoencoder_z_channels = 4
@@ -39,7 +39,7 @@ autoencoder_num_up_layers = 2
 # Training configuration
 train_seed = 1111
 train_task_name = 'celebhq'
-train_autoencoder_batch_size = 3
+train_autoencoder_batch_size = 8
 train_disc_start = -1
 train_disc_weight = 5
 train_codebook_weight = 1.0

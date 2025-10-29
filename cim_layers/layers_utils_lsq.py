@@ -31,7 +31,7 @@ def update_step_size(module, weight_bit_old, input_bit_old, output_bit_old):
 def init_step_size(x, data_bit):
     _, scale = data_quant(x, data_bit = data_bit, isint = True)
     init_step_size = 1 / scale
-    return init_step_size
+    return torch.tensor(init_step_size).to(x.device)
 
 
 def input_quant(module, x, isint):
