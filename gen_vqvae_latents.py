@@ -112,8 +112,8 @@ if __name__ == '__main__':
     task_name = 'model_pths'
     num_samples = 36
     num_grid_rows = 6
-    vqvae_checkpoint_name = 'runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_autoencoder_ckpt_latest.pth'
+    vqvae_checkpoint_name = 'runs_VQVAE_noise_server/vqvae_20251028-131331_save/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
     save_latents = True
-    latent_dir_name = 'vqvae_latents_28-2'
+    latent_dir_name = 'vqvae_latents_29'
 
     infer(task_name, num_samples, num_grid_rows, vqvae_checkpoint_name, save_latents, latent_dir_name)
