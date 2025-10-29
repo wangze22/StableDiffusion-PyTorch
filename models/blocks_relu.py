@@ -1,6 +1,8 @@
 import torch
 import torch.nn as nn
 
+from models.multihead_attention import CustomMultiheadAttention
+
 
 def get_time_embedding(time_steps, temb_dim):
     r"""
@@ -80,7 +82,7 @@ class DownBlock(nn.Module):
             )
             
             self.attentions = nn.ModuleList(
-                [nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+                [CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
                  for _ in range(num_layers)]
             )
         
@@ -91,7 +93,7 @@ class DownBlock(nn.Module):
                  for _ in range(num_layers)]
             )
             self.cross_attentions = nn.ModuleList(
-                [nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+                [CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
                  for _ in range(num_layers)]
             )
             self.context_proj = nn.ModuleList(
@@ -198,7 +200,7 @@ class MidBlock(nn.Module):
         )
         
         self.attentions = nn.ModuleList(
-            [nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+            [CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
              for _ in range(num_layers)]
         )
         if self.cross_attn:
@@ -208,7 +210,7 @@ class MidBlock(nn.Module):
                  for _ in range(num_layers)]
             )
             self.cross_attentions = nn.ModuleList(
-                [nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+                [CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
                  for _ in range(num_layers)]
             )
             self.context_proj = nn.ModuleList(
@@ -325,7 +327,7 @@ class UpBlock(nn.Module):
             
             self.attentions = nn.ModuleList(
                 [
-                    nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+                    CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
                     for _ in range(num_layers)
                 ]
             )
@@ -429,7 +431,7 @@ class UpBlockUnet(nn.Module):
         
         self.attentions = nn.ModuleList(
             [
-                nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+                CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
                 for _ in range(num_layers)
             ]
         )
@@ -441,7 +443,7 @@ class UpBlockUnet(nn.Module):
                  for _ in range(num_layers)]
             )
             self.cross_attentions = nn.ModuleList(
-                [nn.MultiheadAttention(out_channels, num_heads, batch_first=True)
+                [CustomMultiheadAttention(out_channels, num_heads, batch_first=True)
                  for _ in range(num_layers)]
             )
             self.context_proj = nn.ModuleList(

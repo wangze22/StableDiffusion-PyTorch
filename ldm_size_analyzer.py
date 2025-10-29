@@ -7,7 +7,7 @@ import torch
 
 import config.celebhq_text_image_cond_tc05 as cfg
 from cim_weight_mapper.weight_process import map_weight_for_model
-from models.unet_cond_celebhq import Unet
+from models.unet_cond_base_relu import Unet
 from cim_weight_mapper.weight_mapper import *
 from cim_qn_train.progressive_qn_train import *
 import cim_layers.register_dict as reg_dict
