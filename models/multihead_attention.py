@@ -1,5 +1,4 @@
 import math
-from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -15,12 +14,12 @@ class CustomMultiheadAttention(nn.Module):
 
     def __init__(
         self,
-        embed_dim: int,
-        num_heads: int,
-        dropout: float = 0.0,
-        bias: bool = True,
-        batch_first: bool = False,
-    ) -> None:
+        embed_dim,
+        num_heads,
+        dropout=0.0,
+        bias=True,
+        batch_first=False,
+    ):
         super().__init__()
         if embed_dim % num_heads != 0:
             raise ValueError("embed_dim must be divisible by num_heads")
@@ -39,14 +38,14 @@ class CustomMultiheadAttention(nn.Module):
 
     def forward(
         self,
-        query: torch.Tensor,
-        key: Optional[torch.Tensor] = None,
-        value: Optional[torch.Tensor] = None,
-        attn_mask: Optional[torch.Tensor] = None,
-        key_padding_mask: Optional[torch.Tensor] = None,
-        need_weights: bool = True,
-        average_attn_weights: bool = True,
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        query,
+        key=None,
+        value=None,
+        attn_mask=None,
+        key_padding_mask=None,
+        need_weights=True,
+        average_attn_weights=True,
+    ):
         if key is None:
             key = query
         if value is None:
@@ -69,7 +68,7 @@ class CustomMultiheadAttention(nn.Module):
         if not self.batch_first:
             attn_output = attn_output.transpose(0, 1)
 
-        attn_weights_to_return: Optional[torch.Tensor] = None
+        attn_weights_to_return = None
         if need_weights:
             if average_attn_weights:
                 attn_weights_to_return = attn_weights.mean(dim=1)
@@ -79,8 +78,8 @@ class CustomMultiheadAttention(nn.Module):
         return attn_output, attn_weights_to_return
 
     def _project_inputs(
-        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        self, query, key, value
+    ):
         if self.batch_first:
             q = query
             k = key
@@ -99,16 +98,16 @@ class CustomMultiheadAttention(nn.Module):
         v = self._reshape_for_heads(v)
         return q, k, v
 
-    def _reshape_for_heads(self, tensor: torch.Tensor) -> torch.Tensor:
+    def _reshape_for_heads(self, tensor):
         batch_size, seq_len, _ = tensor.shape
         return tensor.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
 
     def _apply_masks(
         self,
-        attn_logits: torch.Tensor,
-        attn_mask: Optional[torch.Tensor],
-        key_padding_mask: Optional[torch.Tensor],
-    ) -> torch.Tensor:
+        attn_logits,
+        attn_mask,
+        key_padding_mask,
+    ):
         if attn_mask is not None:
             mask = attn_mask
             if mask.dim() == 2:
