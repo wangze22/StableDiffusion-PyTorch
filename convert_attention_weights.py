@@ -17,44 +17,31 @@ def convert_container(obj, converted_modules):
 
 def convert_mapping(mapping, converted_modules):
     new_mapping = mapping.__class__()
-    skip_keys = set()
     for key, value in mapping.items():
-        if isinstance(key, str) and key in skip_keys:
-            continue
-
-        if isinstance(key, str) and key.endswith(".in_proj_weight"):
-            base = key[: -len(".in_proj_weight")]
-            if f"{base}.q_proj.weight" in mapping or f"{base}.q_proj.weight" in new_mapping:
-                new_mapping[key] = convert_container(value, converted_modules)
+        if isinstance(key, str):
+            if key.endswith(".in_proj_weight"):
+                base = key[: -len(".in_proj_weight")]
+                weight = value
+                if weight.size(0) % 3 != 0:
+                    raise ValueError(f"Unexpected shape for {key}: {tuple(weight.shape)}")
+                q_w, k_w, v_w = weight.chunk(3, dim=0)
+                new_mapping[f"{base}.q_proj.weight"] = q_w.contiguous()
+                new_mapping[f"{base}.k_proj.weight"] = k_w.contiguous()
+                new_mapping[f"{base}.v_proj.weight"] = v_w.contiguous()
+                converted_modules.add(base)
                 continue
 
-            weight = value
-            if weight.size(0) % 3 != 0:
-                raise ValueError(f"Unexpected shape for {key}: {tuple(weight.shape)}")
-            q_w, k_w, v_w = weight.chunk(3, dim=0)
-            new_mapping[f"{base}.q_proj.weight"] = q_w.contiguous()
-            new_mapping[f"{base}.k_proj.weight"] = k_w.contiguous()
-            new_mapping[f"{base}.v_proj.weight"] = v_w.contiguous()
-
-            bias_key = f"{base}.in_proj_bias"
-            if bias_key in mapping:
-                bias = mapping[bias_key]
+            if key.endswith(".in_proj_bias"):
+                base = key[: -len(".in_proj_bias")]
+                bias = value
                 if bias.size(0) % 3 != 0:
-                    raise ValueError(f"Unexpected shape for {bias_key}: {tuple(bias.shape)}")
+                    raise ValueError(f"Unexpected shape for {key}: {tuple(bias.shape)}")
                 q_b, k_b, v_b = bias.chunk(3, dim=0)
                 new_mapping[f"{base}.q_proj.bias"] = q_b.contiguous()
                 new_mapping[f"{base}.k_proj.bias"] = k_b.contiguous()
                 new_mapping[f"{base}.v_proj.bias"] = v_b.contiguous()
-                skip_keys.add(bias_key)
-
-            converted_modules.add(base)
-            continue
-
-        if isinstance(key, str) and key.endswith(".in_proj_bias"):
-            base = key[: -len(".in_proj_bias")]
-            if f"{base}.q_proj.bias" in mapping or f"{base}.q_proj.bias" in new_mapping:
-                new_mapping[key] = convert_container(value, converted_modules)
-            continue
+                converted_modules.add(base)
+                continue
 
         new_mapping[key] = convert_container(value, converted_modules)
 
@@ -94,8 +81,8 @@ if __name__ == "__main__":
     # Example:
     # INPUT_PATH = r"C:\path\to\old_weights.pt"
     # OUTPUT_PATH = r"C:\path\to\converted_weights.pt"
-    INPUT_PATH = "runs_VQVAE_noise_server/vqvae_20251028-131331_save/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth"
-    OUTPUT_PATH = "runs_VQVAE_noise_server/vqvae_20251028-131331_save/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest_qkv.pth"
+    INPUT_PATH = 'runs_tc05_qn_train_server/ddpm_20251028-195206_save_condition_0.5/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    OUTPUT_PATH ='runs_tc05_qn_train_server/ddpm_20251028-195206_save_condition_0.5/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip_qkv.pth'
     DRY_RUN = False
 
     main()
