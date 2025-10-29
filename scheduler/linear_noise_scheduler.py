@@ -89,7 +89,8 @@ def extract(v, i, shape):
     out = out.view([i.shape[0]] + [1] * (len(shape) - 1))
     return out
 
-
+# diffusion-DDIM-pytorch:
+# https://github.com/Alokia/diffusion-DDIM-pytorch/tree/master
 class DDPMSampler(nn.Module):
     def __init__(self, model: nn.Module, beta: Tuple[int, int], T: int):
         super().__init__()
@@ -168,7 +169,8 @@ class DDPMSampler(nn.Module):
             return x_t  # [batch_size, channels, height, width]
         return torch.stack(x, dim=1)  # [batch_size, sample, channels, height, width]
 
-
+# diffusion-DDIM-pytorch:
+# https://github.com/Alokia/diffusion-DDIM-pytorch/tree/master
 class DDIMSampler(nn.Module):
     def __init__(self, model, beta: Tuple[int, int], T: int):
         super().__init__()
