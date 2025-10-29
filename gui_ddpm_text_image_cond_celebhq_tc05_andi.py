@@ -1,6 +1,5 @@
 ﻿import threading
 import time
-from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -185,20 +184,12 @@ def sample_with_mask_and_prompt(
         sampler.model = original_model
 
 
-# ------------- Model bundle -------------
-
-@dataclass
-class ModelBundle:
-    model: Unet
-    vae: VQVAE
-    text_tokenizer: Any
-    text_model: Any
-
+# ------------- Model loading -------------
 
 def load_models_and_configs(
-        model,
+        model: Unet,
         vqvae_ckpt_path: Path,
-        ) -> ModelBundle:
+        ) -> Tuple[Unet, VQVAE, Any, Any]:
     # Validate
     assert cfg.condition_config is not None, 'Condition config required for text+image conditioning.'
     condition_types = cfg.ldm_condition_types
@@ -229,18 +220,25 @@ def load_models_and_configs(
         raise FileNotFoundError(f'VAE checkpoint not found: {vqvae_ckpt_path}')
     vae.load_state_dict(torch.load(str(vqvae_ckpt_path), map_location = device))
 
-    return ModelBundle(
-        model = model, vae = vae,
-        text_tokenizer = text_tokenizer, text_model = text_model,
-        )
+    return model, vae, text_tokenizer, text_model
 
 
 # ------------- GUI -------------
 
 class MaskPainterGUI:
-    def __init__(self, master: tk.Tk, bundle: ModelBundle):
+    def __init__(
+            self,
+            master: tk.Tk,
+            model: Unet,
+            vae: VQVAE,
+            text_tokenizer: Any,
+            text_model: Any,
+            ):
         self.master = master
-        self.bundle = bundle
+        self.model = model
+        self.vae = vae
+        self.text_tokenizer = text_tokenizer
+        self.text_model = text_model
 
         # Initialize dataset once for caption alignment and efficiency
         try:
@@ -935,10 +933,10 @@ class MaskPainterGUI:
             num_steps = self.num_inference_steps_var.get()
             mask_oh = one_hot_from_class_map(class_map_copy, self.num_classes).unsqueeze(0).to(device)
             img = sample_with_mask_and_prompt(
-                model = self.bundle.model,
-                vae = self.bundle.vae,
-                text_tokenizer = self.bundle.text_tokenizer,
-                text_model = self.bundle.text_model,
+                model = self.model,
+                vae = self.vae,
+                text_tokenizer = self.text_tokenizer,
+                text_model = self.text_model,
                 mask_oh = mask_oh,
                 prompt_text = prompt_text or '',
                 cf_guidance_scale = cf_scale,
@@ -960,14 +958,14 @@ class MaskPainterGUI:
 
 def main(model, vqvae_ckpt):
     try:
-        bundle = load_models_and_configs(model, Path(vqvae_ckpt))
+        model, vae, text_tokenizer, text_model = load_models_and_configs(model, Path(vqvae_ckpt))
     except Exception as e:
         messagebox.showerror('Initialization Error', f'Failed to load models or config: {e}')
         return
 
     root = tk.Tk()
     root.title('CelebHQ DDPM GUI (text + mask conditional)')
-    app = MaskPainterGUI(root, bundle)
+    app = MaskPainterGUI(root, model, vae, text_tokenizer, text_model)
     root.mainloop()
 
 
