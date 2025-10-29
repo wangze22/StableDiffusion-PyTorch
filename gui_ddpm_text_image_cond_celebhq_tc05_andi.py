@@ -15,7 +15,7 @@ import torch.nn as nn
 import torchvision
 from torchvision.utils import make_grid
 
-from models.unet_cond_base import Unet
+from models.unet_cond_base_relu import Unet
 from models.vqvae import VQVAE
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler, DDIMSampler
 from utils.text_utils import get_tokenizer_and_model, get_text_representation
