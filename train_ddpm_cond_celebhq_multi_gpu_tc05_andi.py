@@ -445,7 +445,7 @@ class LDM_AnDi(ProgressiveTrain):
 # Configure launch parameters here; edit as needed before running.
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
-num_images = 10
+num_images = 1000000
 local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
 
