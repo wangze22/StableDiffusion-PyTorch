@@ -1,9 +1,10 @@
 import os
 import json
-from glob import glob
+import tarfile
+from collections import Counter, defaultdict
 from pathlib import Path
 
-# Allow PyTorch/Matplotlib to coexist with duplicate OpenMP runtimes on Windows
+# Allow PyTorch/Matplotlib to coexist with duplicate OpenMP runtimes on Windows.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import torch
@@ -13,19 +14,81 @@ import webdataset as wds
 import matplotlib.pyplot as plt
 
 
-def build_loader():
-    root = Path(r"D:\datasets\huggingface\data_512_2M")
-    shards = sorted(glob(str(root / "data_*.tar")))
+DATA_ROOT = Path(r"D:\datasets\huggingface\data_512_2M")
+_summary_limit_env = os.getenv("DATASET_SUMMARY_LIMIT")
+SUMMARY_SAMPLE_LIMIT = int(_summary_limit_env) if _summary_limit_env else None
+if SUMMARY_SAMPLE_LIMIT is not None and SUMMARY_SAMPLE_LIMIT <= 0:
+    SUMMARY_SAMPLE_LIMIT = None
+
+
+def extract_subset(key):
+    """Derive subset name from a WebDataset key such as flux_512_100k_00000000."""
+    key_str = str(key).split("/")[-1]
+    if "." in key_str:
+        key_str = key_str.split(".", 1)[0]
+    if "_" in key_str:
+        base, suffix = key_str.rsplit("_", 1)
+        if suffix.isdigit():
+            return base
+    return key_str
+
+
+def get_shards(root: Path = DATA_ROOT):
+    shards = sorted(root.glob("data_*.tar"))
     if not shards:
         raise FileNotFoundError(f"没有找到 {root} 下的 data_*.tar")
+    return shards
 
-    urls = [f"file:{Path(p).as_posix()}" for p in shards]
+
+def summarize_dataset(shards, sample_limit=None):
+    subset_counts = Counter()
+    subset_formats = defaultdict(Counter)
+    total_files = 0
+    processed_samples = 0
+
+    limit_reached = False
+    for shard_path in shards:
+        with tarfile.open(shard_path) as tar:
+            for member in tar:
+                if not member.isfile():
+                    continue
+                name = member.name.split("/")[-1]
+                if "." not in name:
+                    continue
+                stem, ext = name.rsplit(".", 1)
+                ext = ext.lower()
+                subset = extract_subset(stem)
+                subset_formats[subset][ext] += 1
+                total_files += 1
+                if ext == "json":
+                    subset_counts[subset] += 1
+                    processed_samples += 1
+                    if sample_limit and processed_samples >= sample_limit:
+                        limit_reached = True
+                        break
+            if limit_reached:
+                break
+
+    return {
+        "subset_counts": subset_counts,
+        "subset_formats": subset_formats,
+        "total_files": total_files,
+        "total_samples": sum(subset_counts.values()),
+        "sample_limit_hit": limit_reached,
+    }
+
+
+def build_loader(shards=None):
+    if shards is None:
+        shards = get_shards()
+
+    urls = [f"file:{p.as_posix()}" for p in shards]
 
     transform = T.Compose([
         T.Resize(256),
         T.CenterCrop(224),
         T.ToTensor(),
-        T.Normalize([0.5]*3, [0.5]*3)
+        T.Normalize([0.5] * 3, [0.5] * 3),
     ])
 
     def parse_caption(j):
@@ -47,19 +110,6 @@ def build_loader():
             if key in info and isinstance(info[key], str):
                 return info[key]
         return ""
-
-    def extract_subset(key):
-        key_str = str(key)
-        # 保留最后一段，避免包含路径前缀
-        key_str = key_str.split("/")[-1]
-        # 去掉可能的扩展名
-        if "." in key_str:
-            key_str = key_str.split(".", 1)[0]
-        if "_" in key_str:
-            base, suffix = key_str.rsplit("_", 1)
-            if suffix.isdigit():
-                return base
-        return key_str
 
     dataset = (
         wds.WebDataset(urls, shardshuffle=False, handler=wds.ignore_and_continue)
@@ -91,7 +141,23 @@ def show_images(images, captions):
 
 
 def main():
-    loader = build_loader()
+    shards = get_shards()
+    summary = summarize_dataset(shards, sample_limit=SUMMARY_SAMPLE_LIMIT)
+
+    subset_counts = summary["subset_counts"]
+    subset_formats = summary["subset_formats"]
+    total_samples = summary["total_samples"]
+
+    print(f"数据目录: {DATA_ROOT}")
+    print(f"总样本数: {total_samples} | 子数据集数量: {len(subset_counts)}")
+    for subset, count in subset_counts.most_common():
+        formats = subset_formats[subset]
+        format_desc = ", ".join(f"{ext}:{formats[ext]}" for ext in sorted(formats))
+        print(f"  - {subset}: {count} samples ({format_desc})")
+    if summary["sample_limit_hit"]:
+        print("[警告] 统计只遍历到 sample_limit，数据量为估计值。")
+
+    loader = build_loader(shards=shards)
     seen_subsets = set()
     for batch_idx, (images, captions, subsets) in enumerate(loader):
         batch_subsets = set(subsets)
