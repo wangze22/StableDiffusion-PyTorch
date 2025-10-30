@@ -466,8 +466,8 @@ andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
 
-
-# trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
+model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251029-170724_save_FP/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
 
 base_epochs = 500
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
@@ -480,11 +480,11 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
 
     cfg.train_ldm_epochs = base_epochs
     # FP 训练
-    trainer.train_model(
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = rank, backend = backend,
-        )
+    # trainer.train_model(
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = rank, backend = backend,
+    #     )
 
     trainer.convert_to_layers(
         convert_layer_type_list = reg_dict.nn_layers,

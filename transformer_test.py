@@ -39,7 +39,7 @@ model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffus
 
 text_tokenizer, text_model = get_tokenizer_and_model(cfg.ldm_text_condition_text_embed_model, device = device)
 
-text_prompt = ['hello']
+text_prompt = ['hello world, ni hao']
 text_prompt_embed = get_text_representation(text_prompt, text_tokenizer, text_model, device)
 
 x_t = torch.randn(1, 4, 32, 32).to(device)
