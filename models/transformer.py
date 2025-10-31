@@ -117,7 +117,7 @@ class DIT(nn.Module):
             'num_heads': self.num_heads,
             'head_dim': self.head_dim,
         }
-        self.layers = nn.ModuleList([
+        self.transformer_layers = nn.ModuleList([
             TransformerLayer(
                 layer_config,
                 cross_attn=self.text_cond,
@@ -191,7 +191,7 @@ class DIT(nn.Module):
             context_hidden_states = cond_input['text'].to(device=out.device, dtype=out.dtype)
 
         # Go through the transformer layers
-        for layer in self.layers:
+        for layer in self.transformer_layers:
             out = layer(out, t_emb, context_hidden_states)
 
         # Shift and scale predictions for output normalization

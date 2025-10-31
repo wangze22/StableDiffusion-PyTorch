@@ -459,7 +459,7 @@ threshold = 1e-6
 
 # Instantiate the DiT model
 dit_model_config = {
-    'hidden_size'     : 1024,
+    'hidden_size'     : 288,
     'patch_size'      : 2,
     'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
     'num_layers'      : 12,

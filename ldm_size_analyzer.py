@@ -63,7 +63,10 @@ def collect_layer_info(model: torch.nn.Module):
             # Skip the root module to avoid redundant reporting.
             continue
         param_count = sum(p.numel() for p in module.parameters(recurse=False))
-        layer_details.append((name, module.__class__.__name__, param_count))
+        # 获取模块的权重形状信息（如果存在）
+        weight_shape = getattr(module, 'weight', None)
+        layer_details.append((name, module.__class__.__name__, param_count, 
+                            weight_shape.shape if weight_shape is not None else None))
     return layer_details
 
 
@@ -77,8 +80,10 @@ def main():
 
     print(f'Total layers: {len(layer_details)}')
     print('Layer details (name | type | parameters):')
-    for name, module_type, param_count in layer_details:
-        print(f'- {name} | {module_type} | params: {param_count}')
+    for name, module_type, param_count, weight_shape in layer_details:
+        # 添加权重形状信息到输出中
+        shape_str = f" | shape: {list(weight_shape)}" if weight_shape is not None else ""
+        print(f'- {name} | {module_type} | params: {param_count}{shape_str}')
 
     print(f'Total parameters: {total_params/1e6:.2f} M')
 

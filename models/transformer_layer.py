@@ -16,7 +16,7 @@ class TransformerLayer(nn.Module):
             of both mlp/attention prior to residual connection.
     """
 
-    def __init__(self, config, *, cross_attn=False, context_dim=None):
+    def __init__(self, config, *, cross_attn = False, context_dim = None):
         super().__init__()
         self.hidden_size = config['hidden_size']
         self.cross_attn = cross_attn
@@ -25,27 +25,27 @@ class TransformerLayer(nn.Module):
         ff_hidden_dim = 4 * self.hidden_size
 
         # Layer norm for attention block
-        self.att_norm = nn.LayerNorm(self.hidden_size, elementwise_affine=False, eps=1E-6)
+        self.att_norm = nn.LayerNorm(self.hidden_size, elementwise_affine = False, eps = 1E-6)
 
         self.attn_block = Attention(config)
 
         # Layer norm for mlp block
-        self.ff_norm = nn.LayerNorm(self.hidden_size, elementwise_affine=False, eps=1E-6)
+        self.ff_norm = nn.LayerNorm(self.hidden_size, elementwise_affine = False, eps = 1E-6)
 
         self.mlp_block = nn.Sequential(
             nn.Linear(self.hidden_size, ff_hidden_dim),
-            nn.GELU(approximate='tanh'),
+            nn.GELU(approximate = 'tanh'),
             nn.Linear(ff_hidden_dim, self.hidden_size),
-        )
+            )
 
         if self.cross_attn:
             assert self.context_dim is not None, "Context dimension must be provided for cross attention"
-            self.cross_attn_norm = nn.LayerNorm(self.hidden_size, elementwise_affine=False, eps=1E-6)
+            self.cross_attn_norm = nn.LayerNorm(self.hidden_size, elementwise_affine = False, eps = 1E-6)
             self.cross_attn_block = CustomMultiheadAttention(
                 self.hidden_size,
                 config['num_heads'],
-                batch_first=True,
-            )
+                batch_first = True,
+                )
             self.context_proj = nn.Linear(self.context_dim, self.hidden_size)
 
         # Scale Shift Parameter predictions for this layer
@@ -57,10 +57,12 @@ class TransformerLayer(nn.Module):
         # When cross-attention is enabled, we add another (2 * hidden_size) + hidden_size prediction
         # for the cross-attention norm and residual scale.
         adaptive_out_dim = 6 * self.hidden_size + (3 * self.hidden_size if self.cross_attn else 0)
+        adaptive_out_dim_low_rank = adaptive_out_dim // 8
         self.adaptive_norm_layer = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(self.hidden_size, adaptive_out_dim, bias=True)
-        )
+            nn.ReLU(),
+            nn.Linear(self.hidden_size, adaptive_out_dim_low_rank, bias = True),
+            nn.Linear(adaptive_out_dim_low_rank, adaptive_out_dim, bias = True),
+            )
 
         ############################
         # DiT Layer Initialization #
@@ -77,16 +79,20 @@ class TransformerLayer(nn.Module):
             nn.init.xavier_uniform_(self.context_proj.weight)
             nn.init.constant_(self.context_proj.bias, 0)
 
-    def forward(self, x, condition, context=None):
+    def forward(self, x, condition, context = None):
         chunk_count = 6 + (3 if self.cross_attn else 0)
-        scale_shift_params = self.adaptive_norm_layer(condition).chunk(chunk_count, dim=1)
+        scale_shift_params = self.adaptive_norm_layer(condition).chunk(chunk_count, dim = 1)
         if self.cross_attn:
-            (pre_attn_shift, pre_attn_scale, post_attn_scale,
-             pre_cross_shift, pre_cross_scale, post_cross_scale,
-             pre_mlp_shift, pre_mlp_scale, post_mlp_scale) = scale_shift_params
+            (
+                pre_attn_shift, pre_attn_scale, post_attn_scale,
+                pre_cross_shift, pre_cross_scale, post_cross_scale,
+                pre_mlp_shift, pre_mlp_scale, post_mlp_scale
+                ) = scale_shift_params
         else:
-            (pre_attn_shift, pre_attn_scale, post_attn_scale,
-             pre_mlp_shift, pre_mlp_scale, post_mlp_scale) = scale_shift_params
+            (
+                pre_attn_shift, pre_attn_scale, post_attn_scale,
+                pre_mlp_shift, pre_mlp_scale, post_mlp_scale
+                ) = scale_shift_params
         out = x
         attn_norm_output = (self.att_norm(out) * (1 + pre_attn_scale.unsqueeze(1))
                             + pre_attn_shift.unsqueeze(1))
@@ -100,8 +106,8 @@ class TransformerLayer(nn.Module):
                 cross_norm_output,
                 context_tokens,
                 context_tokens,
-                need_weights=False,
-            )
+                need_weights = False,
+                )
             out = out + post_cross_scale.unsqueeze(1) * cross_attn_out
 
         mlp_norm_output = (self.ff_norm(out) * (1 + pre_mlp_scale.unsqueeze(1)) +
