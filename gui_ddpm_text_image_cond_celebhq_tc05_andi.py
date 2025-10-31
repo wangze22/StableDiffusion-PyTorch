@@ -1003,6 +1003,13 @@ if __name__ == '__main__':
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-195206/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-195206_save_condition_0.5/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip_qkv.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
+
+    # ======================================================================= #
+    # 以下是使用 TC05 计算 Attention QKV 的权重
+    # ======================================================================= #
+    vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
+    ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+
     model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
     trainer = ProgressiveTrain(model)
     trainer.convert_to_layers(
@@ -1013,10 +1020,10 @@ if __name__ == '__main__':
         output_bit = 8,
         weight_bit = 4,
         )
-    trainer.add_enhance_branch_LoR(
-        ops_factor = 0.05,
-        )
-    trainer.add_enhance_layers(ops_factor = 0.05)
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)

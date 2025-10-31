@@ -486,7 +486,7 @@ base_epochs = 500
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
     """Configure per-process environment and launch distributed training worker."""
     os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-    os.environ.setdefault('MASTER_PORT', '29500')
+    os.environ.setdefault('MASTER_PORT', '29501')
     os.environ['WORLD_SIZE'] = str(world_size)
     os.environ['RANK'] = str(rank)
     os.environ['LOCAL_RANK'] = str(rank)
@@ -552,7 +552,7 @@ if __name__ == '__main__':
     if local_rank < 0 and torch.cuda.device_count() > 1:
         world_size = torch.cuda.device_count()
         os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-        os.environ.setdefault('MASTER_PORT', '29500')
+        os.environ.setdefault('MASTER_PORT', '29501')
         mp.spawn(
             _distributed_worker,
             args = (world_size, num_images, backend),
