@@ -37,7 +37,7 @@ def build_dit_model_config(condition_config: dict) -> dict:
         'patch_size': 2,
         'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
         'num_layers': 12,
-        'num_heads': 8,
+        'num_heads': 9,
         'head_dim': 32,
         'condition_config': condition_config,
     }

@@ -441,7 +441,7 @@ class LDM_AnDi(ProgressiveTrain):
 # =================================================================== #
 # =================================================================== #
 # =================================================================== #
-
+cfg.train_ldm_output_root = 'runs_tc05_DiT_qn_train_server'
 # Configure launch parameters here; edit as needed before running.
 timestamp = datetime.now().strftime('%Y%m%d-%H%M%S')
 
@@ -463,8 +463,8 @@ dit_model_config = {
     'patch_size'      : 2,
     'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
     'num_layers'      : 12,
-    'num_heads'       : 16,
-    'head_dim'        : 64,
+    'num_heads'       : 9,
+    'head_dim'        : 32,
     'condition_config': cfg.diffusion_model_config.get('condition_config'),
 }
 model = DIT(
@@ -475,12 +475,12 @@ andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
 
-model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251029-170724_save_FP/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-try:
-    state_dict = torch.load(model_paths_ldm_ckpt_resume, map_location = 'cpu')
-    trainer.model.load_state_dict(state_dict)
-except (FileNotFoundError, RuntimeError) as err:
-    print(f'Warning: unable to load checkpoint {model_paths_ldm_ckpt_resume}: {err}')
+# model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251029-170724_save_FP/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+# try:
+#     state_dict = torch.load(model_paths_ldm_ckpt_resume, map_location = 'cpu')
+#     trainer.model.load_state_dict(state_dict)
+# except (FileNotFoundError, RuntimeError) as err:
+#     print(f'Warning: unable to load checkpoint {model_paths_ldm_ckpt_resume}: {err}')
 
 base_epochs = 500
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
@@ -493,11 +493,11 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
 
     cfg.train_ldm_epochs = base_epochs
     # FP 训练
-    # trainer.train_model(
-    #     num_workers = num_workers,
-    #     num_images = num_images,
-    #     local_rank = rank, backend = backend,
-    #     )
+    trainer.train_model(
+        num_workers = num_workers,
+        num_images = num_images,
+        local_rank = rank, backend = backend,
+        )
 
     trainer.convert_to_layers(
         convert_layer_type_list = reg_dict.nn_layers,
