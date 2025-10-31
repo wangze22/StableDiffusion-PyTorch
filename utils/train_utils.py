@@ -5,6 +5,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
+import matplotlib
+
+# Force a non-interactive backend so matplotlib does not rely on Tk in worker processes.
+matplotlib.use('Agg', force = True)
 import matplotlib.pyplot as plt
 import numpy as np
 import json

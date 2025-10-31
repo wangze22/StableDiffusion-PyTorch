@@ -357,10 +357,6 @@ def forward_with_hooks_layer_flag(model, input_data):
 
     return output, output_dict
 
-import textwrap
-import matplotlib.pyplot as plt
-import textwrap
-
 import matplotlib.pyplot as plt
 import textwrap
 

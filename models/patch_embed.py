@@ -73,8 +73,11 @@ class PatchEmbedding(nn.Module):
         nn.init.constant_(self.patch_embed[0].bias, 0)
 
     def forward(self, x):
-        grid_size_h = self.image_height // self.patch_height
-        grid_size_w = self.image_width // self.patch_width
+        _, _, height, width = x.shape
+        assert height % self.patch_height == 0, "Input height must be divisible by patch height"
+        assert width % self.patch_width == 0, "Input width must be divisible by patch width"
+        grid_size_h = height // self.patch_height
+        grid_size_w = width // self.patch_width
 
         # B, C, H, W -> B, (Patches along height * Patches along width), Patch Dimension
         # Number of tokens = Patches along height * Patches along width
@@ -89,6 +92,6 @@ class PatchEmbedding(nn.Module):
         pos_embed = get_patch_position_embedding(pos_emb_dim=self.hidden_size,
                                                  grid_size=(grid_size_h, grid_size_w),
                                                  device=x.device)
-        out += pos_embed
+        out = out + pos_embed.to(out.dtype)
         return out
 

@@ -465,8 +465,16 @@ model = Unet(
 andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
+trainer.convert_to_layers(
+    convert_layer_type_list = reg_dict.nn_layers,
+    tar_layer_type = 'layers_qn_lsq',
+    noise_scale = andi_cfg.qn_noise_range[1],
+    input_bit = andi_cfg.qn_feature_bit_range[1],
+    output_bit = andi_cfg.qn_feature_bit_range[1],
+    weight_bit = andi_cfg.qn_weight_bit_range[1],
+    )
 
-model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251029-170724_save_FP/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251030-034711_save_LSQ_break/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
 trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
 
 base_epochs = 500
@@ -486,26 +494,23 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
     #     local_rank = rank, backend = backend,
     #     )
 
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = andi_cfg.qn_noise_range[0],
-        input_bit = andi_cfg.qn_feature_bit_range[0],
-        output_bit = andi_cfg.qn_feature_bit_range[0],
-        weight_bit = andi_cfg.qn_weight_bit_range[0],
-        )
 
     # LSQ 训练
     andi_cfg.train_stage = 'LSQ'
-    cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
-    trainer.progressive_train(
-        qn_cycle = andi_cfg.qn_cycle,
-        update_layer_type_list = ['layers_qn_lsq'],
-        start_cycle = 0,
-        weight_bit_range = andi_cfg.qn_weight_bit_range,
-        input_bit_range = andi_cfg.qn_feature_bit_range,
-        output_bit_range = andi_cfg.qn_feature_bit_range,
-        noise_scale_range = andi_cfg.qn_noise_range,
+    # cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
+    # trainer.progressive_train(
+    #     qn_cycle = andi_cfg.qn_cycle,
+    #     update_layer_type_list = ['layers_qn_lsq'],
+    #     start_cycle = 0,
+    #     weight_bit_range = andi_cfg.qn_weight_bit_range,
+    #     input_bit_range = andi_cfg.qn_feature_bit_range,
+    #     output_bit_range = andi_cfg.qn_feature_bit_range,
+    #     noise_scale_range = andi_cfg.qn_noise_range,
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = rank, backend = backend,
+    #     )
+    trainer.train_model(
         num_workers = num_workers,
         num_images = num_images,
         local_rank = rank, backend = backend,

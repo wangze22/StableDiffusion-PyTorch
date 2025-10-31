@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from models.unet_cond_base_relu import Unet
+from models.transformer import DIT
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
 from config import celebhq_text_image_cond_tc05 as cfg
@@ -457,17 +457,30 @@ num_workers = 8
 patience = 30
 threshold = 1e-6
 
-# Instantiate the unet model
-model = Unet(
+# Instantiate the DiT model
+dit_model_config = {
+    'hidden_size'     : 1024,
+    'patch_size'      : 2,
+    'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
+    'num_layers'      : 12,
+    'num_heads'       : 16,
+    'head_dim'        : 64,
+    'condition_config': cfg.diffusion_model_config.get('condition_config'),
+}
+model = DIT(
     im_channels = cfg.autoencoder_z_channels,
-    model_config = cfg.diffusion_model_config,
+    model_config = dit_model_config,
     )
 andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
 
 model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251029-170724_save_FP/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
+try:
+    state_dict = torch.load(model_paths_ldm_ckpt_resume, map_location = 'cpu')
+    trainer.model.load_state_dict(state_dict)
+except (FileNotFoundError, RuntimeError) as err:
+    print(f'Warning: unable to load checkpoint {model_paths_ldm_ckpt_resume}: {err}')
 
 base_epochs = 500
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
