@@ -133,6 +133,7 @@ class LDM_AnDi(ProgressiveTrain):
 
         save_every = max(1, int(cfg.train_ldm_save_every_epochs))
         loss_history: List[Dict[str, float]] = []
+        avg_loss_history: List[float] = []
         legacy_ckpt_dir = Path(cfg.train_task_name)
         if is_main_process:
             ensure_directory(legacy_ckpt_dir)
@@ -381,7 +382,11 @@ class LDM_AnDi(ProgressiveTrain):
             total_loss, total_batches = loss_stats.tolist()
             avg_loss = float(total_loss / max(total_batches, 1.0))
 
-            lr_scheduler.step(avg_loss)
+            avg_loss_history.append(avg_loss)
+            smoothing_window = 5
+            recent_losses = avg_loss_history[-smoothing_window:] or [avg_loss]
+            smoothed_metric = float(np.mean(recent_losses))
+            lr_scheduler.step(smoothed_metric)
             current_lr = optimizer.param_groups[0]['lr']
             epoch_duration = time.time() - epoch_start_time
             if is_main_process:
