@@ -34,7 +34,7 @@ class TransformerLayer(nn.Module):
 
         self.mlp_block = nn.Sequential(
             nn.Linear(self.hidden_size, ff_hidden_dim),
-            nn.GELU(approximate = 'tanh'),
+            nn.ReLU(),
             nn.Linear(ff_hidden_dim, self.hidden_size),
             )
 

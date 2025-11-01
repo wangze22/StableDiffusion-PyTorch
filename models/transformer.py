@@ -107,7 +107,7 @@ class DIT(nn.Module):
         # Initial projection from sinusoidal time embedding
         self.t_proj = nn.Sequential(
             nn.Linear(self.timestep_emb_dim, self.hidden_size),
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(self.hidden_size, self.hidden_size)
         )
 
@@ -130,7 +130,7 @@ class DIT(nn.Module):
 
         # Scale and Shift parameters for the norm
         self.adaptive_norm_layer = nn.Sequential(
-            nn.SiLU(),
+            nn.ReLU(),
             nn.Linear(self.hidden_size, 2 * self.hidden_size, bias=True)
         )
 

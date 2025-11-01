@@ -383,7 +383,7 @@ class LDM_AnDi(ProgressiveTrain):
             avg_loss = float(total_loss / max(total_batches, 1.0))
 
             avg_loss_history.append(avg_loss)
-            smoothing_window = 5
+            smoothing_window = int(cfg.train_ldm_epochs / 10)
             recent_losses = avg_loss_history[-smoothing_window:] or [avg_loss]
             smoothed_metric = float(np.mean(recent_losses))
             lr_scheduler.step(smoothed_metric)
@@ -471,7 +471,7 @@ dit_model_config = {
     'num_heads'       : 9,
     'head_dim'        : 32,
     'condition_config': cfg.diffusion_model_config.get('condition_config'),
-}
+    }
 model = DIT(
     im_channels = cfg.autoencoder_z_channels,
     model_config = dit_model_config,
@@ -480,14 +480,28 @@ andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
 
-# model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251029-170724_save_FP/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-# try:
-#     state_dict = torch.load(model_paths_ldm_ckpt_resume, map_location = 'cpu')
-#     trainer.model.load_state_dict(state_dict)
-# except (FileNotFoundError, RuntimeError) as err:
-#     print(f'Warning: unable to load checkpoint {model_paths_ldm_ckpt_resume}: {err}')
+trainer.convert_to_layers(
+    convert_layer_type_list = reg_dict.nn_layers,
+    tar_layer_type = 'layers_qn_lsq',
+    noise_scale = andi_cfg.qna_noise_range[0],
+    input_bit = andi_cfg.qna_feature_bit_range[0],
+    output_bit = andi_cfg.qna_feature_bit_range[0],
+    weight_bit = andi_cfg.qna_weight_bit_range[0],
+    )
+
+trainer.add_enhance_branch_LoR(
+    ops_factor = 0.05,
+    )
+trainer.add_enhance_layers(ops_factor = 0.05)
+
+model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251031-195625/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+
+state_dict = torch.load(model_paths_ldm_ckpt_resume)
+trainer.model.load_state_dict(state_dict)
 
 base_epochs = 500
+
+
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
     """Configure per-process environment and launch distributed training worker."""
     os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
@@ -498,43 +512,43 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
 
     cfg.train_ldm_epochs = base_epochs
     # FP 训练
-    trainer.train_model(
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = rank, backend = backend,
-        )
+    # trainer.train_model(
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = rank, backend = backend,
+    #     )
 
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = andi_cfg.qn_noise_range[0],
-        input_bit = andi_cfg.qn_feature_bit_range[0],
-        output_bit = andi_cfg.qn_feature_bit_range[0],
-        weight_bit = andi_cfg.qn_weight_bit_range[0],
-        )
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.nn_layers,
+    #     tar_layer_type = 'layers_qn_lsq',
+    #     noise_scale = andi_cfg.qn_noise_range[0],
+    #     input_bit = andi_cfg.qn_feature_bit_range[0],
+    #     output_bit = andi_cfg.qn_feature_bit_range[0],
+    #     weight_bit = andi_cfg.qn_weight_bit_range[0],
+    #     )
 
     # LSQ 训练
-    andi_cfg.train_stage = 'LSQ'
-    cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
-    trainer.progressive_train(
-        qn_cycle = andi_cfg.qn_cycle,
-        update_layer_type_list = ['layers_qn_lsq'],
-        start_cycle = 0,
-        weight_bit_range = andi_cfg.qn_weight_bit_range,
-        input_bit_range = andi_cfg.qn_feature_bit_range,
-        output_bit_range = andi_cfg.qn_feature_bit_range,
-        noise_scale_range = andi_cfg.qn_noise_range,
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = rank, backend = backend,
-        )
+    # andi_cfg.train_stage = 'LSQ'
+    # cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
+    # trainer.progressive_train(
+    #     qn_cycle = andi_cfg.qn_cycle,
+    #     update_layer_type_list = ['layers_qn_lsq'],
+    #     start_cycle = 0,
+    #     weight_bit_range = andi_cfg.qn_weight_bit_range,
+    #     input_bit_range = andi_cfg.qn_feature_bit_range,
+    #     output_bit_range = andi_cfg.qn_feature_bit_range,
+    #     noise_scale_range = andi_cfg.qn_noise_range,
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = rank, backend = backend,
+    #     )
 
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
-    trainer.add_enhance_branch_LoR(
-        ops_factor = 0.05,
-        )
-    trainer.add_enhance_layers(ops_factor = 0.05)
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     cfg.train_ldm_epochs = base_epochs
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,
