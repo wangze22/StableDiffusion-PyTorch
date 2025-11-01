@@ -1005,13 +1005,36 @@ if __name__ == '__main__':
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
 
     # ======================================================================= #
-    # 以下是使用 TC05 计算 Attention QKV 的权重
+    # 以下是使用 TC05 计算 Attention QKV 的权重 (Unet 模型)
     # ======================================================================= #
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
     ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
-    model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
+    # model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
 
+    # ======================================================================= #
+    # DiT 模型
+    # ======================================================================= #
+    from models.transformer import DIT
+    dit_model_config = {
+        'hidden_size'     : 288,
+        'patch_size'      : 2,
+        'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
+        'num_layers'      : 12,
+        'num_heads'       : 9,
+        'head_dim'        : 32,
+        'condition_config': cfg.diffusion_model_config.get('condition_config'),
+        }
+    ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-021811/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    model = DIT(
+        im_channels = cfg.autoencoder_z_channels,
+        model_config = dit_model_config,
+        ).to(device)
+    # ======================================================================= #
+
+    # ======================================================================= #
+    # 加载模型
+    # ======================================================================= #
     trainer = ProgressiveTrain(model)
     trainer.convert_to_layers(
         convert_layer_type_list = reg_dict.nn_layers,
