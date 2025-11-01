@@ -1026,6 +1026,7 @@ if __name__ == '__main__':
         'condition_config': cfg.diffusion_model_config.get('condition_config'),
         }
     ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-021811/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
     model = DIT(
         im_channels = cfg.autoencoder_z_channels,
         model_config = dit_model_config,
@@ -1036,18 +1037,18 @@ if __name__ == '__main__':
     # 加载模型
     # ======================================================================= #
     trainer = ProgressiveTrain(model)
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = 0.08,
-        input_bit = 8,
-        output_bit = 8,
-        weight_bit = 4,
-        )
-    trainer.add_enhance_branch_LoR(
-        ops_factor = 0.05,
-        )
-    trainer.add_enhance_layers(ops_factor = 0.05)
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.nn_layers,
+    #     tar_layer_type = 'layers_qn_lsq',
+    #     noise_scale = 0.0,
+    #     input_bit = 8,
+    #     output_bit = 8,
+    #     weight_bit = 4,
+    #     )
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)

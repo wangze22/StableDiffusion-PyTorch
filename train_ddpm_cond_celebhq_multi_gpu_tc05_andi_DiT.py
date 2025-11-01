@@ -494,12 +494,12 @@ trainer.add_enhance_branch_LoR(
     )
 trainer.add_enhance_layers(ops_factor = 0.05)
 
-model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251101-205802_save_SiLU/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-021811_save_ReLU/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
 
 state_dict = torch.load(model_paths_ldm_ckpt_resume)
 trainer.model.load_state_dict(state_dict)
 
-base_epochs = 300
+base_epochs = 500
 
 
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
