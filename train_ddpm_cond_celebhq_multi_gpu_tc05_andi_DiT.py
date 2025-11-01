@@ -268,7 +268,7 @@ class LDM_AnDi(ProgressiveTrain):
             patience = patience,
             threshold = threshold,
             factor = 0.5,
-            min_lr = 1e-7,
+            min_lr = 1e-6,
             )
 
         autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
