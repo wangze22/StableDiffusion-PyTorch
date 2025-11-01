@@ -133,6 +133,7 @@ class LDM_AnDi(ProgressiveTrain):
 
         save_every = max(1, int(cfg.train_ldm_save_every_epochs))
         loss_history: List[Dict[str, float]] = []
+        avg_loss_history: List[float] = []
         legacy_ckpt_dir = Path(cfg.train_task_name)
         if is_main_process:
             ensure_directory(legacy_ckpt_dir)
@@ -268,7 +269,7 @@ class LDM_AnDi(ProgressiveTrain):
             patience = patience,
             threshold = threshold,
             factor = 0.5,
-            min_lr = 1e-7,
+            min_lr = 1e-6,
             )
 
         autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
@@ -381,7 +382,11 @@ class LDM_AnDi(ProgressiveTrain):
             total_loss, total_batches = loss_stats.tolist()
             avg_loss = float(total_loss / max(total_batches, 1.0))
 
-            lr_scheduler.step(avg_loss)
+            avg_loss_history.append(avg_loss)
+            smoothing_window = int(cfg.train_ldm_epochs / 10)
+            recent_losses = avg_loss_history[-smoothing_window:] or [avg_loss]
+            smoothed_metric = float(np.mean(recent_losses))
+            lr_scheduler.step(smoothed_metric)
             current_lr = optimizer.param_groups[0]['lr']
             epoch_duration = time.time() - epoch_start_time
             if is_main_process:
@@ -465,16 +470,22 @@ model = Unet(
 andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
+
 trainer.convert_to_layers(
     convert_layer_type_list = reg_dict.nn_layers,
     tar_layer_type = 'layers_qn_lsq',
-    noise_scale = andi_cfg.qn_noise_range[1],
-    input_bit = andi_cfg.qn_feature_bit_range[1],
-    output_bit = andi_cfg.qn_feature_bit_range[1],
-    weight_bit = andi_cfg.qn_weight_bit_range[1],
+    noise_scale = andi_cfg.qna_noise_range[0],
+    input_bit = andi_cfg.qna_feature_bit_range[0],
+    output_bit = andi_cfg.qna_feature_bit_range[0],
+    weight_bit = andi_cfg.qna_weight_bit_range[0],
     )
 
-model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251030-034711_save_LSQ_break/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+trainer.add_enhance_branch_LoR(
+    ops_factor = 0.05,
+    )
+trainer.add_enhance_layers(ops_factor = 0.05)
+
+model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
 trainer.model.load_state_dict(torch.load(model_paths_ldm_ckpt_resume))
 
 base_epochs = 500
@@ -494,9 +505,17 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
     #     local_rank = rank, backend = backend,
     #     )
 
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.nn_layers,
+    #     tar_layer_type = 'layers_qn_lsq',
+    #     noise_scale = andi_cfg.qn_noise_range[0],
+    #     input_bit = andi_cfg.qn_feature_bit_range[0],
+    #     output_bit = andi_cfg.qn_feature_bit_range[0],
+    #     weight_bit = andi_cfg.qn_weight_bit_range[0],
+    #     )
 
     # LSQ 训练
-    andi_cfg.train_stage = 'LSQ'
+    # andi_cfg.train_stage = 'LSQ'
     # cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
     # trainer.progressive_train(
     #     qn_cycle = andi_cfg.qn_cycle,
@@ -510,18 +529,13 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
     #     num_images = num_images,
     #     local_rank = rank, backend = backend,
     #     )
-    trainer.train_model(
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = rank, backend = backend,
-        )
 
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
-    trainer.add_enhance_branch_LoR(
-        ops_factor = 0.05,
-        )
-    trainer.add_enhance_layers(ops_factor = 0.05)
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     cfg.train_ldm_epochs = base_epochs
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,

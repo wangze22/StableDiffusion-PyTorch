@@ -978,25 +978,25 @@ if __name__ == '__main__':
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0500/ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251026-062209/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip._glfast.pth'
 
-    # 参数1
+    # 参数1 (attention 未使用 ACIM, 需要切换至 AnDi-no-attention 分支)
     # 先使用未加噪的 vae 生成的 vqvae_latents_22 训练 ldm
     # 然后再训练加噪的 vae
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251027-171338_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_autoencoder_ckpt_latest.pth'
 
-    # 参数2
+    # 参数2 (attention 未使用 ACIM, 需要切换至 AnDi-no-attention 分支)
     # 使用加噪的 vae 生成的 vqvae_latents_28 训练 ldm
     # 使用相同的 vae 模型进行生成
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-141224/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-022443_save/celebhq/n_scale_0.1000/vqvae_autoencoder_ckpt_latest.pth'
 
-    # 参数3
+    # 参数3 (attention 未使用 ACIM, 需要切换至 AnDi-no-attention 分支)
     # 先使用未加噪的 vae 生成的 vqvae_latents_28 训练 ldm
     # 然后再训练加噪的 vae
     ldm_ckpt = 'runs_tc05_qn_train_server/ddpm_20251028-141224/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
 
-    # 参数4 (效果似乎好一点)
+    # 参数4 (效果似乎好一点) (attention 未使用 ACIM, 需要切换至 AnDi-no-attention 分支)
     # 先使用未加噪的 vae 生成的 vqvae_latents_28 训练 ldm
     # ldm cfg drop = 0.5
     # 然后再训练加噪的 vae
@@ -1009,8 +1009,9 @@ if __name__ == '__main__':
     # ======================================================================= #
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
     ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
-
+    ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     model = Unet(im_channels = cfg.autoencoder_z_channels, model_config = cfg.diffusion_model_config).to(device)
+
     trainer = ProgressiveTrain(model)
     trainer.convert_to_layers(
         convert_layer_type_list = reg_dict.nn_layers,
@@ -1020,10 +1021,10 @@ if __name__ == '__main__':
         output_bit = 8,
         weight_bit = 4,
         )
-    # trainer.add_enhance_branch_LoR(
-    #     ops_factor = 0.05,
-    #     )
-    # trainer.add_enhance_layers(ops_factor = 0.05)
+    trainer.add_enhance_branch_LoR(
+        ops_factor = 0.05,
+        )
+    trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)
