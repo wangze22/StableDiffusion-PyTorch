@@ -105,7 +105,7 @@ def main():
     model_weight_mapping_info = map_weight_for_model(model,
                                                      module_for_map = reg_dict.op_layers,
                                                      draw_weight_block = True,
-                                                     array_device_name = 'TC05',
+                                                     array_device_name = 'TC05-Unet',
                                                      array_size = array_size,
                                                      weight_block_size = array_size)
 

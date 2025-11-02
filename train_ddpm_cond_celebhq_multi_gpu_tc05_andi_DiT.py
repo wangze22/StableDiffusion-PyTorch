@@ -14,7 +14,7 @@ from dataset.celeb_dataset import CelebDataset
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
-from torch.optim.lr_scheduler import ReduceLROnPlateau
+from torch.optim.lr_scheduler import MultiStepLR
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -133,7 +133,6 @@ class LDM_AnDi(ProgressiveTrain):
 
         save_every = max(1, int(cfg.train_ldm_save_every_epochs))
         loss_history: List[Dict[str, float]] = []
-        avg_loss_history: List[float] = []
         legacy_ckpt_dir = Path(cfg.train_task_name)
         if is_main_process:
             ensure_directory(legacy_ckpt_dir)
@@ -264,13 +263,21 @@ class LDM_AnDi(ProgressiveTrain):
         if use_amp and is_main_process:
             logger.info('Using mixed precision (CUDA AMP) for training')
 
-        lr_scheduler = ReduceLROnPlateau(
+        total_epochs = max(1, int(cfg.train_ldm_epochs))
+        half_epoch = max(1, total_epochs // 2)
+        quarter = max(1, total_epochs // 4)
+        milestones: List[int] = [half_epoch]
+        later_stage = min(total_epochs - 1, half_epoch + quarter)
+        if later_stage > half_epoch:
+            milestones.append(later_stage)
+        gamma = 0.1**(1/len(milestones))
+        lr_scheduler = MultiStepLR(
             optimizer,
-            patience = patience,
-            threshold = threshold,
-            factor = 0.5,
-            min_lr = 1e-6,
-            )
+            milestones = sorted(set(milestones)),
+            gamma = gamma,
+        )
+        if is_main_process:
+            logger.info(f'Using MultiStepLR with milestones={lr_scheduler.milestones} gamma={gamma}', )
 
         autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
         if device_type == 'cuda':
@@ -381,12 +388,8 @@ class LDM_AnDi(ProgressiveTrain):
                 dist.all_reduce(loss_stats, op = dist.ReduceOp.SUM)
             total_loss, total_batches = loss_stats.tolist()
             avg_loss = float(total_loss / max(total_batches, 1.0))
+            lr_scheduler.step()
 
-            avg_loss_history.append(avg_loss)
-            smoothing_window = int(cfg.train_ldm_epochs / 10)
-            recent_losses = avg_loss_history[-smoothing_window:] or [avg_loss]
-            smoothed_metric = float(np.mean(recent_losses))
-            lr_scheduler.step(smoothed_metric)
             current_lr = optimizer.param_groups[0]['lr']
             epoch_duration = time.time() - epoch_start_time
             if is_main_process:
@@ -459,9 +462,6 @@ num_workers = 8
 # model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-141224_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
 
 
-patience = 30
-threshold = 1e-6
-
 # Instantiate the DiT model
 dit_model_config = {
     'hidden_size'     : 288,
@@ -480,26 +480,11 @@ andi_cfg.train_stage = 'FP'
 
 trainer = LDM_AnDi(model = model)
 
-trainer.convert_to_layers(
-    convert_layer_type_list = reg_dict.nn_layers,
-    tar_layer_type = 'layers_qn_lsq',
-    noise_scale = andi_cfg.qna_noise_range[0],
-    input_bit = andi_cfg.qna_feature_bit_range[0],
-    output_bit = andi_cfg.qna_feature_bit_range[0],
-    weight_bit = andi_cfg.qna_weight_bit_range[0],
-    )
-
-trainer.add_enhance_branch_LoR(
-    ops_factor = 0.05,
-    )
-trainer.add_enhance_layers(ops_factor = 0.05)
-
-model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-021811_save_ReLU/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
-
+model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
 state_dict = torch.load(model_paths_ldm_ckpt_resume)
 trainer.model.load_state_dict(state_dict)
 
-base_epochs = 500
+base_epochs = 1000
 
 
 def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
@@ -512,11 +497,11 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
 
     cfg.train_ldm_epochs = base_epochs
     # FP 训练
-    # trainer.train_model(
-    #     num_workers = num_workers,
-    #     num_images = num_images,
-    #     local_rank = rank, backend = backend,
-    #     )
+    trainer.train_model(
+        num_workers = num_workers,
+        num_images = num_images,
+        local_rank = rank, backend = backend,
+        )
 
     # trainer.convert_to_layers(
     #     convert_layer_type_list = reg_dict.nn_layers,
@@ -545,6 +530,26 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
 
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
+
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.nn_layers,
+        tar_layer_type = 'layers_qn_lsq',
+        noise_scale = andi_cfg.qna_noise_range[0],
+        input_bit = andi_cfg.qna_feature_bit_range[0],
+        output_bit = andi_cfg.qna_feature_bit_range[0],
+        weight_bit = andi_cfg.qna_weight_bit_range[0],
+        )
+
+    trainer.add_enhance_branch_LoR(
+        ops_factor = 0.05,
+        )
+    trainer.add_enhance_layers(ops_factor = 0.05)
+
+    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-030211_save/LSQ_AnDi/0.1000/ddpm_ckpt_text_image_cond_clip.pth'
+
+    state_dict = torch.load(model_paths_ldm_ckpt_resume)
+    trainer.model.load_state_dict(state_dict)
+
     # trainer.add_enhance_branch_LoR(
     #     ops_factor = 0.05,
     #     )
