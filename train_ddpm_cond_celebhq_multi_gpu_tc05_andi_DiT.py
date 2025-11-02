@@ -458,8 +458,10 @@ local_rank = int(os.environ.get('LOCAL_RANK', -1))
 backend = DEFAULT_BACKEND
 
 # 4卡的话 num_workers 最多 8个，否则内存会不足
-num_workers = 8
-# model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_qn_train_server/ddpm_20251028-141224_save/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
+if cfg.environment == 'server':
+    num_workers = 8
+else:
+    num_workers = 0
 
 
 # Instantiate the DiT model
@@ -467,7 +469,7 @@ dit_model_config = {
     'hidden_size'     : 288,
     'patch_size'      : 2,
     'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
-    'num_layers'      : 12,
+    'num_layers'      : 9,
     'num_heads'       : 9,
     'head_dim'        : 32,
     'condition_config': cfg.diffusion_model_config.get('condition_config'),
@@ -475,58 +477,54 @@ dit_model_config = {
 model = DIT(
     im_channels = cfg.autoencoder_z_channels,
     model_config = dit_model_config,
-    )
-andi_cfg.train_stage = 'FP'
+    ).to('cuda')
 
 trainer = LDM_AnDi(model = model)
 
-model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-state_dict = torch.load(model_paths_ldm_ckpt_resume)
-trainer.model.load_state_dict(state_dict)
+# model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+# state_dict = torch.load(model_paths_ldm_ckpt_resume)
+# trainer.model.load_state_dict(state_dict)
 
-base_epochs = 1000
+base_epochs = 500
 
 
-def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
-    """Configure per-process environment and launch distributed training worker."""
-    os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-    os.environ.setdefault('MASTER_PORT', '29501')
-    os.environ['WORLD_SIZE'] = str(world_size)
-    os.environ['RANK'] = str(rank)
-    os.environ['LOCAL_RANK'] = str(rank)
-
+def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[int]) -> None:
+    """Execute the full training/quantisation pipeline for the given worker."""
     cfg.train_ldm_epochs = base_epochs
+
     # FP 训练
+    andi_cfg.train_stage = 'FP'
     trainer.train_model(
         num_workers = num_workers,
         num_images = num_images,
-        local_rank = rank, backend = backend,
+        local_rank = local_rank, backend = backend,
         )
 
-    # trainer.convert_to_layers(
-    #     convert_layer_type_list = reg_dict.nn_layers,
-    #     tar_layer_type = 'layers_qn_lsq',
-    #     noise_scale = andi_cfg.qn_noise_range[0],
-    #     input_bit = andi_cfg.qn_feature_bit_range[0],
-    #     output_bit = andi_cfg.qn_feature_bit_range[0],
-    #     weight_bit = andi_cfg.qn_weight_bit_range[0],
-    #     )
-
     # LSQ 训练
-    # andi_cfg.train_stage = 'LSQ'
-    # cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
-    # trainer.progressive_train(
-    #     qn_cycle = andi_cfg.qn_cycle,
-    #     update_layer_type_list = ['layers_qn_lsq'],
-    #     start_cycle = 0,
-    #     weight_bit_range = andi_cfg.qn_weight_bit_range,
-    #     input_bit_range = andi_cfg.qn_feature_bit_range,
-    #     output_bit_range = andi_cfg.qn_feature_bit_range,
-    #     noise_scale_range = andi_cfg.qn_noise_range,
-    #     num_workers = num_workers,
-    #     num_images = num_images,
-    #     local_rank = rank, backend = backend,
-    #     )
+    andi_cfg.train_stage = 'LSQ'
+    cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
+
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.nn_layers,
+        tar_layer_type = 'layers_qn_lsq',
+        noise_scale = andi_cfg.qn_noise_range[0],
+        input_bit = andi_cfg.qn_feature_bit_range[0],
+        output_bit = andi_cfg.qn_feature_bit_range[0],
+        weight_bit = andi_cfg.qn_weight_bit_range[0],
+        )
+
+    trainer.progressive_train(
+        qn_cycle = andi_cfg.qn_cycle,
+        update_layer_type_list = ['layers_qn_lsq'],
+        start_cycle = 0,
+        weight_bit_range = andi_cfg.qn_weight_bit_range,
+        input_bit_range = andi_cfg.qn_feature_bit_range,
+        output_bit_range = andi_cfg.qn_feature_bit_range,
+        noise_scale_range = andi_cfg.qn_noise_range,
+        num_workers = num_workers,
+        num_images = num_images,
+        local_rank = local_rank, backend = backend,
+        )
 
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
@@ -545,10 +543,10 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
 
-    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-030211_save/LSQ_AnDi/0.1000/ddpm_ckpt_text_image_cond_clip.pth'
-
-    state_dict = torch.load(model_paths_ldm_ckpt_resume)
-    trainer.model.load_state_dict(state_dict)
+    # model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-030211_save/LSQ_AnDi/0.1000/ddpm_ckpt_text_image_cond_clip.pth'
+    #
+    # state_dict = torch.load(model_paths_ldm_ckpt_resume)
+    # trainer.model.load_state_dict(state_dict)
 
     # trainer.add_enhance_branch_LoR(
     #     ops_factor = 0.05,
@@ -565,11 +563,22 @@ def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], b
         noise_scale_range = andi_cfg.qna_noise_range,
         num_workers = num_workers,
         num_images = num_images,
-        local_rank = rank, backend = backend,
+        local_rank = local_rank, backend = backend,
         )
 
     if dist.is_initialized():
         dist.destroy_process_group()
+
+
+def _distributed_worker(rank: int, world_size: int, num_images: Optional[int], backend: str) -> None:
+    """Configure per-process environment and launch distributed training worker."""
+    os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
+    os.environ.setdefault('MASTER_PORT', '29501')
+    os.environ['WORLD_SIZE'] = str(world_size)
+    os.environ['RANK'] = str(rank)
+    os.environ['LOCAL_RANK'] = str(rank)
+
+    _run_training_pipeline(local_rank = rank, backend = backend, num_images = num_images)
 
 
 if __name__ == '__main__':
@@ -584,4 +593,6 @@ if __name__ == '__main__':
             join = True,
             )
     else:
-        pass
+        # 在单卡或显式指定 local_rank 的场景下，直接运行训练流程
+        effective_local_rank = local_rank if local_rank >= 0 else -1
+        _run_training_pipeline(local_rank = effective_local_rank, backend = backend, num_images = num_images)
