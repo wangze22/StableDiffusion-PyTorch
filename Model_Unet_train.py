@@ -40,6 +40,9 @@ import cim_layers.register_dict as reg_dict
 import config.andi_config as andi_cfg
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
+GPU_IDS = [0, 1, 2, 3]
+if GPU_IDS:
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(gpu_id) for gpu_id in GPU_IDS)
 EMA_DECAY = 0.9999
 DEFAULT_BACKEND = 'gloo' if os.name == 'nt' else 'nccl'
 use_amp = True
@@ -253,6 +256,7 @@ class LDM_AnDi(ProgressiveTrain):
                 device_ids = [local_rank],
                 output_device = local_rank,
                 broadcast_buffers = False,
+                # static_graph = True
                 )
 
         model_module = self.model.module if isinstance(self.model, DDP) else self.model
@@ -271,9 +275,11 @@ class LDM_AnDi(ProgressiveTrain):
             patience = max(cfg.train_ldm_epochs // 10, 5),
             threshold = 1e-5,
         )
+        lr_stop_threshold = getattr(cfg, 'train_ldm_lr_stop_threshold', 1e-7)
         smoothed_loss: Optional[float] = None
         if is_main_process:
             logger.info('Using ReduceLROnPlateau with EMA smoothing alpha=%.2f', SMOOTHING_ALPHA)
+            logger.info('Early stop will trigger when LR < %.3e', lr_stop_threshold)
 
         autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
         if device_type == 'cuda':
@@ -406,8 +412,8 @@ class LDM_AnDi(ProgressiveTrain):
                     memory_percent,
                     )
                 loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
-                persist_loss_history(loss_history, run_artifacts['logs_dir'])
-                plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'], SMOOTHING_ALPHA)
+                persist_loss_history(loss_history, run_artifacts['logs_dir'], SMOOTHING_ALPHA)
+                plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
 
                 should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == cfg.train_ldm_epochs)
                 checkpoints_dir = run_artifacts['checkpoints_dir']
@@ -434,7 +440,17 @@ class LDM_AnDi(ProgressiveTrain):
                         latest_ckpt_path,
                         epoch_ckpt_path,
                         # ema_latest_ckpt_path,
-                        )
+                    )
+
+            if current_lr < lr_stop_threshold:
+                if is_main_process:
+                    logger.info(
+                        'Current LR %.3e < stop threshold %.3e; stopping training after epoch %d',
+                        current_lr,
+                        lr_stop_threshold,
+                        epoch_idx + 1,
+                    )
+                break
 
         if is_main_process and run_artifacts is not None:
             logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
@@ -469,9 +485,10 @@ model = Unet(
 
 trainer = LDM_AnDi(model = model)
 
-model_ckpt = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251102-112100/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-state_dict = torch.load(model_ckpt)
-trainer.model.load_state_dict(state_dict)
+if cfg.environment == 'server':
+    model_ckpt = '/home/workspace/SD_pytorch/runs_Unet_server/ddpm_20251102-193819/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
+    state_dict = torch.load(model_ckpt)
+    trainer.model.load_state_dict(state_dict)
 
 base_epochs = 500
 

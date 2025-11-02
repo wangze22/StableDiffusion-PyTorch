@@ -253,6 +253,7 @@ class LDM_AnDi(ProgressiveTrain):
                 device_ids = [local_rank],
                 output_device = local_rank,
                 broadcast_buffers = False,
+                # static_graph = True
                 )
 
         model_module = self.model.module if isinstance(self.model, DDP) else self.model
@@ -271,9 +272,11 @@ class LDM_AnDi(ProgressiveTrain):
             patience = max(cfg.train_ldm_epochs // 10, 5),
             threshold = 1e-5,
         )
+        lr_stop_threshold = getattr(cfg, 'train_ldm_lr_stop_threshold', 1e-7)
         smoothed_loss: Optional[float] = None
         if is_main_process:
             logger.info('Using ReduceLROnPlateau with EMA smoothing alpha=%.2f', SMOOTHING_ALPHA)
+            logger.info('Early stop will trigger when LR < %.3e', lr_stop_threshold)
 
         autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
         if device_type == 'cuda':
@@ -434,7 +437,17 @@ class LDM_AnDi(ProgressiveTrain):
                         latest_ckpt_path,
                         epoch_ckpt_path,
                         # ema_latest_ckpt_path,
-                        )
+                    )
+
+            if current_lr < lr_stop_threshold:
+                if is_main_process:
+                    logger.info(
+                        'Current LR %.3e < stop threshold %.3e; stopping training after epoch %d',
+                        current_lr,
+                        lr_stop_threshold,
+                        epoch_idx + 1,
+                    )
+                break
 
         if is_main_process and run_artifacts is not None:
             logger.info('Training complete. Artifacts stored in %s', run_artifacts['run_dir'])
@@ -469,16 +482,17 @@ model = DIT(
 
 trainer = LDM_AnDi(model = model)
 
-model_ckpt = '/home/SD_pytorch/runs_DiT_12L_server/ddpm_20251102-225644/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-state_dict = torch.load(model_ckpt)
-trainer.model.load_state_dict(state_dict)
+if cfg.environment == 'server':
+    model_ckpt = '/home/SD_pytorch/runs_DiT_12L_server/ddpm_20251103-023125/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
+    state_dict = torch.load(model_ckpt)
+    trainer.model.load_state_dict(state_dict)
 
 base_epochs = 500
 
 
 def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[int]) -> None:
     """Execute the full training/quantisation pipeline for the given worker."""
-    cfg.train_ldm_epochs = 274
+    cfg.train_ldm_epochs = 264
 
     # FP 训练
     andi_cfg.train_stage = 'FP'
