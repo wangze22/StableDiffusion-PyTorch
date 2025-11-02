@@ -1021,14 +1021,14 @@ if __name__ == '__main__':
         'hidden_size'     : 288,
         'patch_size'      : 2,
         'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
-        'num_layers'      : 12,
+        'num_layers'      : 9,
         'num_heads'       : 9,
         'head_dim'        : 32,
         'condition_config': cfg.diffusion_model_config.get('condition_config'),
         }
     ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-030211/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-030211/LSQ_AnDi/0.1000/ddpm_ckpt_text_image_cond_clip.pth'
-
+    ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-211944/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
     # FP版本的权重没有完全使用 ReLU，因此需要重新训练
     # ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
 
@@ -1041,19 +1041,19 @@ if __name__ == '__main__':
     # ======================================================================= #
     # 加载模型
     # ======================================================================= #
-    trainer = ProgressiveTrain(model)
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = 0.00,
-        input_bit = 8,
-        output_bit = 8,
-        weight_bit = 4,
-        )
-    trainer.add_enhance_branch_LoR(
-        ops_factor = 0.05,
-        )
-    trainer.add_enhance_layers(ops_factor = 0.05)
+    # trainer = ProgressiveTrain(model)
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.nn_layers,
+    #     tar_layer_type = 'layers_qn_lsq',
+    #     noise_scale = 0.00,
+    #     input_bit = 8,
+    #     output_bit = 8,
+    #     weight_bit = 4,
+    #     )
+    # trainer.add_enhance_branch_LoR(
+    #     ops_factor = 0.05,
+    #     )
+    # trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)
