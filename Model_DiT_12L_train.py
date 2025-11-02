@@ -57,7 +57,7 @@ except (RuntimeError, AttributeError):
 
 def gen_run_dir(timestamp, train_stage, noise):
     output_root = cfg.train_ldm_output_root
-    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'{noise:.4f}'
+    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'{noise:.5g}'
     return run_dir
 
 
@@ -472,16 +472,16 @@ model = DIT(
 
 trainer = LDM_AnDi(model = model)
 
-# model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-# state_dict = torch.load(model_paths_ldm_ckpt_resume)
-# trainer.model.load_state_dict(state_dict)
+model_ckpt = '/home/SD_pytorch/runs_DiT_12L_server/ddpm_20251102-225644/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+state_dict = torch.load(model_ckpt)
+trainer.model.load_state_dict(state_dict)
 
 base_epochs = 500
 
 
 def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[int]) -> None:
     """Execute the full training/quantisation pipeline for the given worker."""
-    cfg.train_ldm_epochs = base_epochs
+    cfg.train_ldm_epochs = 350
 
     # FP 训练
     andi_cfg.train_stage = 'FP'
@@ -543,7 +543,7 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
     #     ops_factor = 0.05,
     #     )
     # trainer.add_enhance_layers(ops_factor = 0.05)
-    cfg.train_ldm_epochs = base_epochs
+    cfg.train_ldm_epochs = base_epochs // andi_cfg.qna_cycle
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,
         update_layer_type_list = ['layers_qn_lsq'],
