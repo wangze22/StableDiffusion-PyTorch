@@ -14,7 +14,7 @@ from dataset.celeb_dataset import CelebDataset
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
-from torch.optim.lr_scheduler import MultiStepLR
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
@@ -43,6 +43,7 @@ os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 EMA_DECAY = 0.9999
 DEFAULT_BACKEND = 'gloo' if os.name == 'nt' else 'nccl'
 use_amp = True
+SMOOTHING_ALPHA = 0.2
 
 try:
     mp.set_sharing_strategy('file_system')
@@ -263,21 +264,16 @@ class LDM_AnDi(ProgressiveTrain):
         if use_amp and is_main_process:
             logger.info('Using mixed precision (CUDA AMP) for training')
 
-        total_epochs = max(1, int(cfg.train_ldm_epochs))
-        half_epoch = max(1, total_epochs // 2)
-        quarter = max(1, total_epochs // 4)
-        milestones: List[int] = [half_epoch]
-        later_stage = min(total_epochs - 1, half_epoch + quarter)
-        if later_stage > half_epoch:
-            milestones.append(later_stage)
-        gamma = 0.1**(1/len(milestones))
-        lr_scheduler = MultiStepLR(
+        lr_scheduler = ReduceLROnPlateau(
             optimizer,
-            milestones = sorted(set(milestones)),
-            gamma = gamma,
+            mode = 'min',
+            factor = 0.5,
+            patience = max(cfg.train_ldm_epochs // 10, 5),
+            threshold = 1e-5,
         )
+        smoothed_loss: Optional[float] = None
         if is_main_process:
-            logger.info(f'Using MultiStepLR with milestones={lr_scheduler.milestones} gamma={gamma}', )
+            logger.info('Using ReduceLROnPlateau with EMA smoothing alpha=%.2f', SMOOTHING_ALPHA)
 
         autocast_kwargs = {'device_type': device_type, 'enabled': use_amp}
         if device_type == 'cuda':
@@ -388,7 +384,8 @@ class LDM_AnDi(ProgressiveTrain):
                 dist.all_reduce(loss_stats, op = dist.ReduceOp.SUM)
             total_loss, total_batches = loss_stats.tolist()
             avg_loss = float(total_loss / max(total_batches, 1.0))
-            lr_scheduler.step()
+            smoothed_loss = avg_loss if smoothed_loss is None else (1.0 - SMOOTHING_ALPHA) * smoothed_loss + SMOOTHING_ALPHA * avg_loss
+            lr_scheduler.step(smoothed_loss)
 
             current_lr = optimizer.param_groups[0]['lr']
             epoch_duration = time.time() - epoch_start_time
@@ -410,7 +407,7 @@ class LDM_AnDi(ProgressiveTrain):
                     )
                 loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
                 persist_loss_history(loss_history, run_artifacts['logs_dir'])
-                plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
+                plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'], SMOOTHING_ALPHA)
 
                 should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == cfg.train_ldm_epochs)
                 checkpoints_dir = run_artifacts['checkpoints_dir']

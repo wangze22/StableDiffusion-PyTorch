@@ -2,7 +2,7 @@ train_stage = 'FP'
 # ======================= #
 # QN 训练参数
 # ======================= #
-qn_cycle = 100
+qn_cycle = 50
 
 qn_weight_bit_range = [8, 4]
 qn_feature_bit_range = [8, 8]
@@ -11,7 +11,7 @@ qn_noise_range = [0.00, 0.08]
 # ======================= #
 # QN 训练参数 - AnDi
 # ======================= #
-qna_cycle = 100
+qna_cycle = 50
 
 qna_weight_bit_range = [4, 4]
 qna_feature_bit_range = [8, 8]
