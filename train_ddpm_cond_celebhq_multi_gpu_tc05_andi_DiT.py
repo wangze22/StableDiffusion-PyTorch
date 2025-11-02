@@ -22,7 +22,7 @@ from tqdm import tqdm
 from models.transformer import DIT
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
-from config import celebhq_text_image_cond_tc05 as cfg
+from config import celebhq_text_image_cond_tc05_no_text as cfg
 from utils.config_utils import validate_image_config, validate_text_config
 from utils.diffusion_utils import *
 from utils.text_utils import *
@@ -469,7 +469,7 @@ dit_model_config = {
     'hidden_size'     : 288,
     'patch_size'      : 2,
     'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
-    'num_layers'      : 9,
+    'num_layers'      : 12,
     'num_heads'       : 9,
     'head_dim'        : 32,
     'condition_config': cfg.diffusion_model_config.get('condition_config'),

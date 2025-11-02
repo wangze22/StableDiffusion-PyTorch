@@ -4,7 +4,7 @@ import os
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 
 import torch
-import config.celebhq_text_image_cond_tc05 as cfg
+import config.celebhq_text_image_cond_tc05_no_text as cfg
 from models.transformer import DIT
 from cim_weight_mapper.weight_process import map_weight_for_model
 import cim_layers.register_dict as reg_dict
@@ -36,7 +36,7 @@ def build_dit_model_config(condition_config: dict) -> dict:
         'hidden_size': 288,
         'patch_size': 2,
         'timestep_emb_dim': cfg.diffusion_model_config['time_emb_dim'],
-        'num_layers': 9,
+        'num_layers': 12,
         'num_heads': 9,
         'head_dim': 32,
         'condition_config': condition_config,
