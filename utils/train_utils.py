@@ -3,7 +3,7 @@ import logging
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import matplotlib
 
@@ -111,7 +111,7 @@ def save_config_snapshot_json(logs_dir: Path, cfg_module: Any) -> Path:
     return snapshot_path
 
 
-def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -> None:
+def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path, smoothing_alpha: Optional[float] = None) -> None:
     """Write loss history to CSV and save aggregate plot."""
     if not loss_history:
         return
@@ -131,7 +131,22 @@ def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -
 
     plt.figure(figsize = (10, 6))
     for metric in metrics:
-        plt.plot(epochs, [entry[metric] for entry in loss_history], label = metric)
+        values = [entry[metric] for entry in loss_history]
+        plt.plot(epochs, values, label = metric)
+        if smoothing_alpha is not None and values:
+            smoothed_values = []
+            for value in values:
+                if not smoothed_values:
+                    smoothed_values.append(value)
+                else:
+                    prev = smoothed_values[-1]
+                    smoothed_values.append((1.0 - smoothing_alpha) * prev + smoothing_alpha * value)
+            plt.plot(
+                epochs,
+                smoothed_values,
+                label = f'{metric} EMA alpha={smoothing_alpha:.2f}',
+                linewidth = 2.0,
+            )
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
     plt.title('DDPM Training Losses')
@@ -140,20 +155,7 @@ def persist_loss_history(loss_history: List[Dict[str, float]], logs_dir: Path) -
     plt.tight_layout()
     plt.savefig(Path(logs_dir) / 'loss_curve.png')
     plt.close()
-
-
-def _ema_smoothing(values: np.ndarray, alpha: float) -> np.ndarray:
-    """Simple EMA smoothing matching training loop usage."""
-    if values.size == 0:
-        return values
-    smoothed = np.zeros_like(values)
-    smoothed[0] = values[0]
-    for idx in range(1, values.size):
-        smoothed[idx] = (1.0 - alpha) * smoothed[idx - 1] + alpha * values[idx]
-    return smoothed
-
-
-def plot_epoch_loss_curve(epoch_idx: int, losses: List[float], logs_dir: Path, smoothing_alpha: Optional[float] = 0.2) -> None:
+def plot_epoch_loss_curve(epoch_idx: int, losses: List[float], logs_dir: Path) -> None:
     """Plot per-step loss trend for a single epoch."""
     if not losses:
         return
@@ -165,14 +167,10 @@ def plot_epoch_loss_curve(epoch_idx: int, losses: List[float], logs_dir: Path, s
     steps = np.arange(1, len(losses) + 1)
 
     plt.figure(figsize = (10, 6))
-    plt.plot(steps, raw_losses, label = f'Epoch {epoch_idx} raw', alpha = 0.7)
-    if smoothing_alpha is not None:
-        smoothed_losses = _ema_smoothing(raw_losses, smoothing_alpha)
-        plt.plot(steps, smoothed_losses, label = f'EMA alpha={smoothing_alpha:.2f}', linewidth = 2.0)
+    plt.plot(steps, raw_losses, label = f'Epoch {epoch_idx}')
     plt.xlabel('Step')
     plt.ylabel('Loss')
     plt.title(f'Loss per Step - Epoch {epoch_idx}')
-    plt.legend()
     plt.grid(True, linestyle = '--', linewidth = 0.5, alpha = 0.7)
     plt.tight_layout()
     plt.savefig(loss_dir / f'epoch_{epoch_idx:03d}.png')

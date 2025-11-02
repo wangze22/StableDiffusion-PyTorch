@@ -19,10 +19,10 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-from models.transformer import DIT
+from models.unet_cond_base_relu import Unet
 from scheduler.linear_noise_scheduler import LinearNoiseScheduler
 
-import Model_DiT_12L_config as cfg
+import Model_Unet_config as cfg
 from utils.config_utils import validate_image_config, validate_text_config
 from utils.diffusion_utils import *
 from utils.text_utils import *
@@ -406,8 +406,8 @@ class LDM_AnDi(ProgressiveTrain):
                     memory_percent,
                     )
                 loss_history.append({'epoch': epoch_idx + 1, 'ldm_loss': avg_loss})
-                persist_loss_history(loss_history, run_artifacts['logs_dir'], SMOOTHING_ALPHA)
-                plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'])
+                persist_loss_history(loss_history, run_artifacts['logs_dir'])
+                plot_epoch_loss_curve(epoch_idx + 1, epoch_losses, run_artifacts['logs_dir'], SMOOTHING_ALPHA)
 
                 should_save = ((epoch_idx + 1) % save_every == 0) or (epoch_idx + 1 == cfg.train_ldm_epochs)
                 checkpoints_dir = run_artifacts['checkpoints_dir']
@@ -460,16 +460,16 @@ else:
     num_workers = 0
 
 
-# Instantiate the DiT model
 
-model = DIT(
+# Instantiate the unet model
+model = Unet(
     im_channels = cfg.autoencoder_z_channels,
-    model_config = cfg.dit_model_config,
+    model_config = cfg.diffusion_model_config,
     ).to('cuda')
 
 trainer = LDM_AnDi(model = model)
 
-model_ckpt = '/home/SD_pytorch/runs_DiT_12L_server/ddpm_20251102-225644/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+model_ckpt = '/home/workspace/SD_pytorch/runs_tc05_qkv_qn_train_server/ddpm_20251102-112100/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
 state_dict = torch.load(model_ckpt)
 trainer.model.load_state_dict(state_dict)
 
@@ -478,7 +478,7 @@ base_epochs = 500
 
 def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[int]) -> None:
     """Execute the full training/quantisation pipeline for the given worker."""
-    cfg.train_ldm_epochs = 274
+    cfg.train_ldm_epochs = 150
 
     # FP 训练
     andi_cfg.train_stage = 'FP'
@@ -573,7 +573,7 @@ if __name__ == '__main__':
     if local_rank < 0 and torch.cuda.device_count() > 1:
         world_size = torch.cuda.device_count()
         os.environ.setdefault('MASTER_ADDR', '127.0.0.1')
-        os.environ.setdefault('MASTER_PORT', '29501')
+        os.environ.setdefault('MASTER_PORT', '29500')
         mp.spawn(
             _distributed_worker,
             args = (world_size, num_images, backend),
