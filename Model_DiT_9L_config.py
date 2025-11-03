@@ -21,11 +21,11 @@ environment = 'server' if _gpu_count > 1 else 'local'
 # Dataset path depends on environment
 if environment == 'server':
     dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
-    train_ldm_output_root = 'runs_tc05_qkv_qn_train_server'
+    train_ldm_output_root = 'runs_DiT_9L_server'
 else:
     # Use current working directory as data path when running locally
     dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
-    train_ldm_output_root = 'runs_tc05_qkv_qn_train_PC'
+    train_ldm_output_root = 'runs_DiT_9L_PC'
 
 
 dataset_im_channels = 3
@@ -121,7 +121,6 @@ diffusion_model_config = {
     'num_up_layers'    : ldm_num_up_layers,
     'condition_config' : condition_config,
     }
-
 dit_model_config = {
     'hidden_size'     : 288,
     'patch_size'      : 2,

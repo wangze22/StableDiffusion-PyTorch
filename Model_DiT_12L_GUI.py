@@ -1012,8 +1012,8 @@ if __name__ == '__main__':
     # DiT 模型
     # ======================================================================= #
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
-    ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251102-225644/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-
+    ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-032551/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-032551/LSQ/0.068571/ddpm_ckpt_text_image_cond_clip.pth'
     model = DIT(
         im_channels = cfg.autoencoder_z_channels,
         model_config = cfg.dit_model_config,
@@ -1023,15 +1023,15 @@ if __name__ == '__main__':
     # ======================================================================= #
     # 加载模型
     # ======================================================================= #
-    # trainer = ProgressiveTrain(model)
-    # trainer.convert_to_layers(
-    #     convert_layer_type_list = reg_dict.nn_layers,
-    #     tar_layer_type = 'layers_qn_lsq',
-    #     noise_scale = 0.00,
-    #     input_bit = 8,
-    #     output_bit = 8,
-    #     weight_bit = 4,
-    #     )
+    trainer = ProgressiveTrain(model)
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.nn_layers,
+        tar_layer_type = 'layers_qn_lsq',
+        noise_scale = 0.0,
+        input_bit = 8,
+        output_bit = 8,
+        weight_bit = 5,
+        )
     # trainer.add_enhance_branch_LoR(
     #     ops_factor = 0.05,
     #     )
