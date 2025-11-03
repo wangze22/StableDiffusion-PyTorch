@@ -17,6 +17,7 @@ if os.environ.get('CFG_GPU_MSG_PRINTED', '0') != '1':
     os.environ['CFG_GPU_MSG_PRINTED'] = '1'
 
 environment = 'server' if _gpu_count > 1 else 'local'
+print(f'Environment: {environment}')
 
 # Dataset path depends on environment
 if environment == 'server':

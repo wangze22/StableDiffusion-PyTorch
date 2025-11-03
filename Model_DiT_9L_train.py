@@ -531,15 +531,6 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
 
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = andi_cfg.qna_noise_range[0],
-        input_bit = andi_cfg.qna_feature_bit_range[0],
-        output_bit = andi_cfg.qna_feature_bit_range[0],
-        weight_bit = andi_cfg.qna_weight_bit_range[0],
-        )
-
     trainer.add_enhance_branch_LoR(
         ops_factor = 0.05,
         )

@@ -468,7 +468,7 @@ backend = DEFAULT_BACKEND
 
 # 4卡的话 num_workers 最多 8个，否则内存会不足
 if cfg.environment == 'server':
-    num_workers = 8
+    num_workers = 6
 else:
     num_workers = 0
 
@@ -487,46 +487,46 @@ if cfg.environment == 'server':
     state_dict = torch.load(model_ckpt)
     trainer.model.load_state_dict(state_dict)
 
-base_epochs = 500
+base_epochs = 1000
 
 
 def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[int]) -> None:
     """Execute the full training/quantisation pipeline for the given worker."""
-    cfg.train_ldm_epochs = 264
+    cfg.train_ldm_epochs = base_epochs
 
     # FP 训练
     andi_cfg.train_stage = 'FP'
-    trainer.train_model(
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = local_rank, backend = backend,
-        )
+    # trainer.train_model(
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = local_rank, backend = backend,
+    #     )
 
     # LSQ 训练
     andi_cfg.train_stage = 'LSQ'
     cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
 
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = andi_cfg.qn_noise_range[0],
-        input_bit = andi_cfg.qn_feature_bit_range[0],
-        output_bit = andi_cfg.qn_feature_bit_range[0],
-        weight_bit = andi_cfg.qn_weight_bit_range[0],
-        )
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.nn_layers,
+    #     tar_layer_type = 'layers_qn_lsq',
+    #     noise_scale = andi_cfg.qn_noise_range[0],
+    #     input_bit = andi_cfg.qn_feature_bit_range[0],
+    #     output_bit = andi_cfg.qn_feature_bit_range[0],
+    #     weight_bit = andi_cfg.qn_weight_bit_range[0],
+    #     )
 
-    trainer.progressive_train(
-        qn_cycle = andi_cfg.qn_cycle,
-        update_layer_type_list = ['layers_qn_lsq'],
-        start_cycle = 0,
-        weight_bit_range = andi_cfg.qn_weight_bit_range,
-        input_bit_range = andi_cfg.qn_feature_bit_range,
-        output_bit_range = andi_cfg.qn_feature_bit_range,
-        noise_scale_range = andi_cfg.qn_noise_range,
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = local_rank, backend = backend,
-        )
+    # trainer.progressive_train(
+    #     qn_cycle = andi_cfg.qn_cycle,
+    #     update_layer_type_list = ['layers_qn_lsq'],
+    #     start_cycle = 0,
+    #     weight_bit_range = andi_cfg.qn_weight_bit_range,
+    #     input_bit_range = andi_cfg.qn_feature_bit_range,
+    #     output_bit_range = andi_cfg.qn_feature_bit_range,
+    #     noise_scale_range = andi_cfg.qn_noise_range,
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = local_rank, backend = backend,
+    #     )
 
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
@@ -545,15 +545,11 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
 
-    # model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-030211_save/LSQ_AnDi/0.1000/ddpm_ckpt_text_image_cond_clip.pth'
-    #
-    # state_dict = torch.load(model_paths_ldm_ckpt_resume)
-    # trainer.model.load_state_dict(state_dict)
-
-    # trainer.add_enhance_branch_LoR(
-    #     ops_factor = 0.05,
-    #     )
-    # trainer.add_enhance_layers(ops_factor = 0.05)
+    # if cfg.environment == 'server':
+    model_ckpt = '/home/SD_pytorch/runs_DiT_12L_server/ddpm_20251103-032551_save/LSQ_AnDi/0.081633/ddpm_ckpt_text_image_cond_clip.pth'
+    state_dict = torch.load(model_ckpt)
+    trainer.model.load_state_dict(state_dict)
+    print('Loaded!!!')
     cfg.train_ldm_epochs = base_epochs // andi_cfg.qna_cycle
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,
