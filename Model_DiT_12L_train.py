@@ -56,9 +56,9 @@ except (RuntimeError, AttributeError):
 # _FD_RESERVE = 32
 
 
-def gen_run_dir(timestamp, train_stage, noise):
+def gen_run_dir(timestamp, train_stage, noise, w_b):
     output_root = cfg.train_ldm_output_root
-    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'{noise:.5g}'
+    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'w{int(w_b)}b_{noise:.5g}'
     return run_dir
 
 
@@ -120,7 +120,7 @@ class LDM_AnDi(ProgressiveTrain):
 
         run_artifacts: Optional[Dict[str, Path]] = None
         if is_main_process:
-            run_dir = gen_run_dir(timestamp = timestamp, train_stage = andi_cfg.train_stage, noise = self.noise_scale)
+            run_dir = gen_run_dir(timestamp = timestamp, train_stage = andi_cfg.train_stage, noise = self.noise_scale, w_b = self.weight_bit)
             run_artifacts = create_run_artifacts(run_dir)
             save_config_snapshot_json(run_artifacts['logs_dir'], cfg)
             logger: logging.Logger = run_artifacts['logger']
