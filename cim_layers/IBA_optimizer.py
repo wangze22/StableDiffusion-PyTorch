@@ -95,7 +95,7 @@ class PercentOptimizerFP(Optimizer):
                 if param.grad is None:
                     continue
                 grad = param.grad.data
-
+                # print(f'grad max = {grad.abs().max()}')
                 # 初始化 state
                 state = self.state[param]
                 if 'step' not in state:
@@ -132,7 +132,7 @@ class PercentOptimizerFP(Optimizer):
                 max_update = update.abs().max()
                 max_weight = param.data.abs().max()
 
-                scale_factor = lr * max_weight / (max_update + eps)
+                scale_factor = max(lr * max_weight / (max_update + eps), lr)
                 update *= scale_factor
                 # ==================== #
 

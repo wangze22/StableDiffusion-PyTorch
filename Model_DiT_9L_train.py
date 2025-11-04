@@ -14,6 +14,7 @@ from dataset.celeb_dataset import CelebDataset
 from torch.amp import GradScaler, autocast
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.optim import Adam
+from cim_layers.IBA_optimizer import PercentOptimizerFP
 from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Subset
 from torch.utils.data.distributed import DistributedSampler
@@ -257,7 +258,7 @@ class LDM_AnDi(ProgressiveTrain):
                 )
 
         model_module = self.model.module if isinstance(self.model, DDP) else self.model
-        optimizer = Adam(self.model.parameters(), lr = cfg.train_ldm_lr)
+        optimizer = PercentOptimizerFP(self.model.parameters(), lr = cfg.train_ldm_lr)
         criterion = torch.nn.MSELoss()
 
         scaler = GradScaler(device = device_type, enabled = True)
@@ -486,7 +487,10 @@ if cfg.environment == 'server':
     model_ckpt = '/home/SD_pytorch/runs_DiT_9L_server/ddpm_20251103-202952/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
     state_dict = torch.load(model_ckpt)
     trainer.model.load_state_dict(state_dict)
-
+else:
+    model_ckpt = 'runs_DiT_9L_server/ddpm_20251103-202952/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
+    state_dict = torch.load(model_ckpt)
+    trainer.model.load_state_dict(state_dict)
 base_epochs = 1000
 
 

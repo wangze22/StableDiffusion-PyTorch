@@ -40,7 +40,7 @@ import cim_layers.register_dict as reg_dict
 import config.andi_config as andi_cfg
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
-GPU_IDS = [0, 1, 2, 3]
+GPU_IDS = [0, 1, 2, 3, 4, 5]
 if GPU_IDS:
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(gpu_id) for gpu_id in GPU_IDS)
 EMA_DECAY = 0.9999
@@ -59,9 +59,9 @@ except (RuntimeError, AttributeError):
 # _FD_RESERVE = 32
 
 
-def gen_run_dir(timestamp, train_stage, noise):
+def gen_run_dir(timestamp, train_stage, noise, w_b):
     output_root = cfg.train_ldm_output_root
-    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'{noise:.5g}'
+    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'w{int(w_b)}b_{noise:.5g}'
     return run_dir
 
 
@@ -123,7 +123,7 @@ class LDM_AnDi(ProgressiveTrain):
 
         run_artifacts: Optional[Dict[str, Path]] = None
         if is_main_process:
-            run_dir = gen_run_dir(timestamp = timestamp, train_stage = andi_cfg.train_stage, noise = self.noise_scale)
+            run_dir = gen_run_dir(timestamp = timestamp, train_stage = andi_cfg.train_stage, noise = self.noise_scale, w_b = self.weight_bit)
             run_artifacts = create_run_artifacts(run_dir)
             save_config_snapshot_json(run_artifacts['logs_dir'], cfg)
             logger: logging.Logger = run_artifacts['logger']
@@ -274,7 +274,7 @@ class LDM_AnDi(ProgressiveTrain):
             factor = 0.5,
             patience = max(cfg.train_ldm_epochs // 10, 5),
             threshold = 1e-5,
-        )
+            )
         lr_stop_threshold = getattr(cfg, 'train_ldm_lr_stop_threshold', 1e-7)
         smoothed_loss: Optional[float] = None
         if is_main_process:
@@ -440,7 +440,7 @@ class LDM_AnDi(ProgressiveTrain):
                         latest_ckpt_path,
                         epoch_ckpt_path,
                         # ema_latest_ckpt_path,
-                    )
+                        )
 
             if current_lr < lr_stop_threshold:
                 if is_main_process:
@@ -449,7 +449,7 @@ class LDM_AnDi(ProgressiveTrain):
                         current_lr,
                         lr_stop_threshold,
                         epoch_idx + 1,
-                    )
+                        )
                 break
 
         if is_main_process and run_artifacts is not None:
@@ -471,11 +471,9 @@ backend = DEFAULT_BACKEND
 
 # 4卡的话 num_workers 最多 8个，否则内存会不足
 if cfg.environment == 'server':
-    num_workers = 8
+    num_workers = 4
 else:
     num_workers = 0
-
-
 
 # Instantiate the unet model
 model = Unet(
@@ -490,7 +488,7 @@ if cfg.environment == 'server':
     state_dict = torch.load(model_ckpt)
     trainer.model.load_state_dict(state_dict)
 
-base_epochs = 500
+base_epochs = 1000
 
 
 def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[int]) -> None:
@@ -499,37 +497,37 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
 
     # FP 训练
     andi_cfg.train_stage = 'FP'
-    trainer.train_model(
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = local_rank, backend = backend,
-        )
+    # trainer.train_model(
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = local_rank, backend = backend,
+    #     )
 
     # LSQ 训练
     andi_cfg.train_stage = 'LSQ'
     cfg.train_ldm_epochs = base_epochs // andi_cfg.qn_cycle
 
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.nn_layers,
-        tar_layer_type = 'layers_qn_lsq',
-        noise_scale = andi_cfg.qn_noise_range[0],
-        input_bit = andi_cfg.qn_feature_bit_range[0],
-        output_bit = andi_cfg.qn_feature_bit_range[0],
-        weight_bit = andi_cfg.qn_weight_bit_range[0],
-        )
-
-    trainer.progressive_train(
-        qn_cycle = andi_cfg.qn_cycle,
-        update_layer_type_list = ['layers_qn_lsq'],
-        start_cycle = 0,
-        weight_bit_range = andi_cfg.qn_weight_bit_range,
-        input_bit_range = andi_cfg.qn_feature_bit_range,
-        output_bit_range = andi_cfg.qn_feature_bit_range,
-        noise_scale_range = andi_cfg.qn_noise_range,
-        num_workers = num_workers,
-        num_images = num_images,
-        local_rank = local_rank, backend = backend,
-        )
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.nn_layers,
+    #     tar_layer_type = 'layers_qn_lsq',
+    #     noise_scale = andi_cfg.qn_noise_range[0],
+    #     input_bit = andi_cfg.qn_feature_bit_range[0],
+    #     output_bit = andi_cfg.qn_feature_bit_range[0],
+    #     weight_bit = andi_cfg.qn_weight_bit_range[0],
+    #     )
+    #
+    # trainer.progressive_train(
+    #     qn_cycle = andi_cfg.qn_cycle,
+    #     update_layer_type_list = ['layers_qn_lsq'],
+    #     start_cycle = 0,
+    #     weight_bit_range = andi_cfg.qn_weight_bit_range,
+    #     input_bit_range = andi_cfg.qn_feature_bit_range,
+    #     output_bit_range = andi_cfg.qn_feature_bit_range,
+    #     noise_scale_range = andi_cfg.qn_noise_range,
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = local_rank, backend = backend,
+    #     )
 
     # LSQ AnDi 训练
     andi_cfg.train_stage = 'LSQ_AnDi'
@@ -548,10 +546,10 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
 
-    # model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_tc05_DiT_qn_train_server/ddpm_20251102-030211_save/LSQ_AnDi/0.1000/ddpm_ckpt_text_image_cond_clip.pth'
-    #
-    # state_dict = torch.load(model_paths_ldm_ckpt_resume)
-    # trainer.model.load_state_dict(state_dict)
+    model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_Unet_server/ddpm_20251102-194952/LSQ_AnDi/0.081224/ddpm_ckpt_text_image_cond_clip.pth'
+
+    state_dict = torch.load(model_paths_ldm_ckpt_resume)
+    trainer.model.load_state_dict(state_dict)
 
     # trainer.add_enhance_branch_LoR(
     #     ops_factor = 0.05,
