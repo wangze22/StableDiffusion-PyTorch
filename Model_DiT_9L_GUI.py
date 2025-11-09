@@ -975,6 +975,7 @@ if __name__ == '__main__':
     # ======================================================================= #
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
     ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-211944/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251105-231756/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth'
     # FP版本的权重没有完全使用 ReLU，因此需要重新训练
     # ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
 
@@ -987,19 +988,19 @@ if __name__ == '__main__':
     # ======================================================================= #
     # 加载模型
     # ======================================================================= #
-    # trainer = ProgressiveTrain(model)
-    # trainer.convert_to_layers(
-    #     convert_layer_type_list = reg_dict.nn_layers,
-    #     tar_layer_type = 'layers_qn_lsq',
-    #     noise_scale = 0.00,
-    #     input_bit = 8,
-    #     output_bit = 8,
-    #     weight_bit = 4,
-    #     )
-    # trainer.add_enhance_branch_LoR(
-    #     ops_factor = 0.05,
-    #     )
-    # trainer.add_enhance_layers(ops_factor = 0.05)
+    trainer = ProgressiveTrain(model)
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.nn_layers,
+        tar_layer_type = 'layers_qn_lsq',
+        noise_scale = 0.05,
+        input_bit = 8,
+        output_bit = 8,
+        weight_bit = 4,
+        )
+    trainer.add_enhance_branch_LoR(
+        ops_factor = 0.05,
+        )
+    trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
 
     main(model, vqvae_ckpt)

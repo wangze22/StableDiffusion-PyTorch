@@ -40,7 +40,7 @@ import cim_layers.register_dict as reg_dict
 import config.andi_config as andi_cfg
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
-GPU_IDS = [0, 1, 2, 3, 4, 5]
+GPU_IDS = [2, 3, 4, 5, 6, 7]
 if GPU_IDS:
     os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(gpu_id) for gpu_id in GPU_IDS)
 EMA_DECAY = 0.9999
@@ -483,10 +483,10 @@ model = Unet(
 
 trainer = LDM_AnDi(model = model)
 
-if cfg.environment == 'server':
-    model_ckpt = '/home/workspace/SD_pytorch/runs_Unet_server/ddpm_20251102-193819/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
-    state_dict = torch.load(model_ckpt)
-    trainer.model.load_state_dict(state_dict)
+# if cfg.environment == 'server':
+#     model_ckpt = '/home/workspace/SD_pytorch/runs_Unet_server/ddpm_20251102-193819/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
+#     state_dict = torch.load(model_ckpt)
+#     trainer.model.load_state_dict(state_dict)
 
 base_epochs = 1000
 
@@ -546,7 +546,7 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
 
-    model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_Unet_server/ddpm_20251102-194952/LSQ_AnDi/0.081224/ddpm_ckpt_text_image_cond_clip.pth'
+    model_paths_ldm_ckpt_resume = '/home/workspace/SD_pytorch/runs_Unet_server/ddpm_20251104-071742/LSQ_AnDi/w4b_0.081633/ddpm_ckpt_text_image_cond_clip.pth'
 
     state_dict = torch.load(model_paths_ldm_ckpt_resume)
     trainer.model.load_state_dict(state_dict)

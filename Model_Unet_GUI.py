@@ -973,7 +973,9 @@ if __name__ == '__main__':
     # ------------- Configuration variables -------------
     ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
     ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251031-052740/LSQ_AnDi/0.0800/ddpm_ckpt_text_image_cond_clip.pth'
-    ldm_ckpt = 'runs_Unet_server/ddpm_20251104-071742/LSQ_AnDi/w4b_0.080408/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_Unet_server/ddpm_20251104-133643/LSQ_AnDi/w4b_0.1/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_Unet_server/ddpm_20251104-133643/LSQ_AnDi/w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_Unet_server/ddpm_20251104-133643/LSQ_AnDi/w4b_0.087755/ddpm_ckpt_text_image_cond_clip.pth'
     # ldm_ckpt = 'runs_tc05_qkv_qn_train_server/ddpm_20251102-112100/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
 
