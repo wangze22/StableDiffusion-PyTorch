@@ -53,7 +53,7 @@ ldm_num_mid_layers = 2
 ldm_num_up_layers = 2
 
 # Conditioning configuration
-ldm_condition_types = [ 'image']
+ldm_condition_types = ['image']
 ldm_text_condition_text_embed_model = 'clip'
 ldm_text_condition_train_text_embed_model = False
 ldm_text_condition_text_embed_dim = 512

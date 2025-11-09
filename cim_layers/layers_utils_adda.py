@@ -116,35 +116,34 @@ def add_adc_noise(module, out_adc, start_col, col_num):
     return out_adc_off_n
 
 
-def bit_split_tensor(x_q, x_bit, slice_bit):
-    assert slice_bit >= 1
-    bit_data_list = []
-    bit_len = int(math.ceil((x_bit - 1) / slice_bit))
-    for b in range(0, x_bit - 1, slice_bit):
-        lsb = b
-        msb = min(b + slice_bit, x_bit - 1)
-        shift_data = floor_pass(x_q / 2 ** lsb)
-        residue_data = floor_no_pass(x_q / 2 ** msb) * 2 ** slice_bit
-        bit_data = shift_data - residue_data
-        bit_data_pass = (bit_data - shift_data / bit_len).detach() + shift_data / bit_len
-        bit_data_list.append(bit_data_pass)
-    bit_data_list = torch.cat(bit_data_list, 0)
-    return bit_data_list
+# def bit_split_tensor(x_q, x_bit, slice_bit):
+#     assert slice_bit >= 1
+#     bit_data_list = []
+#     bit_len = int(math.ceil((x_bit - 1) / slice_bit))
+#     for b in range(0, x_bit - 1, slice_bit):
+#         lsb = b
+#         msb = min(b + slice_bit, x_bit - 1)
+#         shift_data = floor_pass(x_q / 2 ** lsb)
+#         residue_data = floor_no_pass(x_q / 2 ** msb) * 2 ** slice_bit
+#         bit_data = shift_data - residue_data
+#         bit_data_pass = (bit_data - shift_data / bit_len).detach() + shift_data / bit_len
+#         bit_data_list.append(bit_data_pass)
+#     bit_data_list = torch.cat(bit_data_list, 0)
+#     return bit_data_list
 
 
-def bit_concat_tensor(bitwise_data, data_bit, slice_bit):
-    bit_len = int(math.ceil((data_bit - 1) / slice_bit))
-    bitwise_data = torch.chunk(bitwise_data, chunks = bit_len, dim = 0)
-    data_sum = torch.zeros_like(bitwise_data[0], device = bitwise_data[0].device)
-    for i, bit_data in enumerate(bitwise_data):
-        data_sum += bit_data * 2 ** (i * slice_bit)
-    return data_sum
+# def bit_concat_tensor(bitwise_data, data_bit, slice_bit):
+#     bit_len = int(math.ceil((data_bit - 1) / slice_bit))
+#     bitwise_data = torch.chunk(bitwise_data, chunks = bit_len, dim = 0)
+#     data_sum = torch.zeros_like(bitwise_data[0], device = bitwise_data[0].device)
+#     for i, bit_data in enumerate(bitwise_data):
+#         data_sum += bit_data * 2 ** (i * slice_bit)
+#     return data_sum
 
-
+import math
 def bit_concat_tensor(bitwise_data, data_bit, slice_bit):
     # 原实现：沿 dim=0 逐块 chunk 后 for 累加
     # 现在：一次性向量化加权求和（数值完全等价）
-    import math
     bit_len = int(math.ceil((data_bit - 1) / slice_bit))
     # 期望 bitwise_data 的第 0 维是 bit_len * batch（与原实现保持一致）
     s0 = bitwise_data.shape[0]
@@ -161,8 +160,7 @@ def bit_concat_tensor(bitwise_data, data_bit, slice_bit):
 
 def bit_split_tensor(x_q, x_bit, slice_bit):
     # 原实现：for b in range(bit_len) 逐块 floor/拼接
-    # 现在：一次性向量化计算所有切片（保持 STE 与边界一致）
-    import math
+    # 现在：一次性向量化计算所有切片（保持与原实现数值完全一致，包括 msb 截断与 STE 规则）
     assert slice_bit >= 1
     bit_len = int(math.ceil((x_bit - 1) / slice_bit))
     # 构造 [bit_len] 的 lsb / msb 位移
@@ -170,12 +168,15 @@ def bit_split_tensor(x_q, x_bit, slice_bit):
     dtype = x_q.dtype
     idx = torch.arange(bit_len, device=device, dtype=dtype)
     lsb = (idx * slice_bit)
-    msb = lsb + slice_bit
+    # msb 需要与原实现一致进行截断：min(lsb + slice_bit, x_bit - 1)
+    msb = torch.minimum(lsb + slice_bit, torch.tensor(x_bit - 1, device=device, dtype=dtype))
     # 通过广播把 x_q 扩一维到 [bit_len, ...]
-    # floor_no_pass 与原实现一致（从 quant_noise_utils 导入）
     xq_exp = x_q.unsqueeze(0)  # [1, ...] -> [bit_len, ...] 通过广播
-    shift_data   = floor_no_pass(xq_exp / (2 ** lsb).view(bit_len, *([1] * x_q.ndim)))
-    residue_data = floor_no_pass(xq_exp / (2 ** msb).view(bit_len, *([1] * x_q.ndim))) * (2 ** slice_bit)
+    scale_lsb = (2 ** lsb).view(bit_len, *([1] * x_q.ndim))
+    scale_msb = (2 ** msb).view(bit_len, *([1] * x_q.ndim))
+    # 与原实现一致：shift_data 使用 floor_pass；residue_data 使用 floor_no_pass
+    shift_data   = floor_pass(xq_exp / scale_lsb)
+    residue_data = floor_no_pass(xq_exp / scale_msb) * (2 ** slice_bit)
     bit_data = shift_data - residue_data
     # 保持与原实现一致的直通梯度（对每个切片使用 shift_data/bit_len）
     bit_data_pass = (bit_data - shift_data / bit_len).detach() + (shift_data / bit_len)

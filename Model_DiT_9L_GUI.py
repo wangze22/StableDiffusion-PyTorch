@@ -975,7 +975,7 @@ if __name__ == '__main__':
     # ======================================================================= #
     vqvae_ckpt = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
     ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251102-211944/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
-    ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251105-231756/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.099184/ddpm_ckpt_text_image_cond_clip.pth'
     # FP版本的权重没有完全使用 ReLU，因此需要重新训练
     # ldm_ckpt = 'runs_tc05_DiT_qn_train_server/ddpm_20251031-195625_save/FP/0.0000/ddpm_ckpt_text_image_cond_clip.pth'
 

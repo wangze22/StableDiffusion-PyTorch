@@ -548,24 +548,50 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
 
-    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_DiT_9L_server/ddpm_20251103-203514/LSQ_AnDi/w4b_0.081633/ddpm_ckpt_text_image_cond_clip.pth'
+    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.099184/ddpm_ckpt_text_image_cond_clip.pth'
 
     state_dict = torch.load(model_paths_ldm_ckpt_resume)
     trainer.model.load_state_dict(state_dict)
 
-    # trainer.add_enhance_branch_LoR(
-    #     ops_factor = 0.05,
+    # cfg.train_ldm_epochs = base_epochs // andi_cfg.qna_cycle
+    # trainer.progressive_train(
+    #     qn_cycle = andi_cfg.qna_cycle,
+    #     update_layer_type_list = ['layers_qn_lsq'],
+    #     start_cycle = 0,
+    #     weight_bit_range = andi_cfg.qna_weight_bit_range,
+    #     input_bit_range = andi_cfg.qna_feature_bit_range,
+    #     output_bit_range = andi_cfg.qna_feature_bit_range,
+    #     noise_scale_range = andi_cfg.qna_noise_range,
+    #     num_workers = num_workers,
+    #     num_images = num_images,
+    #     local_rank = local_rank, backend = backend,
     #     )
-    # trainer.add_enhance_layers(ops_factor = 0.05)
-    cfg.train_ldm_epochs = base_epochs // andi_cfg.qna_cycle
+
+    # LSQ ADDA 训练
+    andi_cfg.train_stage = 'LSQ_ADDA'
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.custom_layers,
+        tar_layer_type = 'layers_qn_lsq_adda_cim',
+        noise_scale = andi_cfg.adda_weight_bit_range[0],
+        input_bit = andi_cfg.adda_input_bit_range[0],
+        output_bit = andi_cfg.adda_output_bit_range[0],
+        weight_bit = andi_cfg.adda_weight_bit_range[0],
+        dac_bit = andi_cfg.adda_dac_bit_range[0],
+        adc_bit = andi_cfg.adda_adc_bit_range[0],
+        adc_gain_1_scale = 9.071428571,
+        adc_gain_range = [1/64, 1/64] # 8-bit ADC 情况下，增益不可调
+        )
+
+    cfg.train_ldm_epochs = 500 // andi_cfg.adda_cycle
+    cfg.train_ldm_batch_size = 16
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,
         update_layer_type_list = ['layers_qn_lsq'],
         start_cycle = 0,
-        weight_bit_range = andi_cfg.qna_weight_bit_range,
-        input_bit_range = andi_cfg.qna_feature_bit_range,
-        output_bit_range = andi_cfg.qna_feature_bit_range,
-        noise_scale_range = andi_cfg.qna_noise_range,
+        weight_bit_range = andi_cfg.adda_weight_bit_range,
+        input_bit_range = andi_cfg.adda_input_bit_range,
+        output_bit_range = andi_cfg.adda_output_bit_range,
+        noise_scale_range = andi_cfg.adda_weight_bit_range,
         num_workers = num_workers,
         num_images = num_images,
         local_rank = local_rank, backend = backend,

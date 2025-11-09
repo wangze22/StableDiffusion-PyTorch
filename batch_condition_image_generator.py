@@ -12,15 +12,15 @@ from __future__ import annotations
 
 import importlib
 import random
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
-import torch
 from PIL import Image
-import torchvision
-from torchvision.utils import make_grid
+import torch
+from torchvision.transforms import ToPILImage
 from tqdm import tqdm
 
 from dataset.celeb_dataset import CelebDataset
@@ -33,6 +33,7 @@ import cim_layers.register_dict as reg_dict
 
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+to_pil = ToPILImage()
 
 
 def seed_everything(seed: Optional[int]) -> None:
@@ -200,20 +201,24 @@ def prepare_condition_inputs(
     return cond_input, uncond_input
 
 
-def sample_image(
+def sample_batch(
     sampler: DDIMSampler,
     vae: VQVAE,
-    cond_input: Dict[str, torch.Tensor],
-    uncond_input: Dict[str, torch.Tensor],
+    cond_stack: Dict[str, List[torch.Tensor]],
+    uncond_stack: Dict[str, List[torch.Tensor]],
     latent_size: int,
     latent_channels: int,
     num_inference_steps: int,
     guidance_scale: float,
     method: str,
     eta: float,
-) -> Image.Image:
+    batch_size: int,
+) -> List[Image.Image]:
+    cond_input = {key: torch.cat(tensors, dim = 0).to(device) for key, tensors in cond_stack.items()}
+    uncond_input = {key: torch.cat(tensors, dim = 0).to(device) for key, tensors in uncond_stack.items()}
+
     xt = torch.randn(
-        (1, latent_channels, latent_size, latent_size),
+        (batch_size, latent_channels, latent_size, latent_size),
         device = device,
     )
 
@@ -247,9 +252,8 @@ def sample_image(
             decoded = vae.decode(latents)
             decoded = torch.clamp(decoded, -1.0, 1.0).detach().cpu()
             decoded = (decoded + 1) / 2
-            grid = make_grid(decoded, nrow = 1)
-            img = torchvision.transforms.ToPILImage()(grid)
-        return img
+            images = [to_pil(sample) for sample in decoded]
+        return images
     finally:
         sampler.model = original_model
 
@@ -259,6 +263,7 @@ def run_generation(
     vqvae_ckpt: Path,
     ldm_ckpt: Path,
     output_dir: Path,
+    batch_size: int,
     samples_per_condition: int,
     guidance_scale: float,
     num_inference_steps: int,
@@ -270,8 +275,13 @@ def run_generation(
 ) -> None:
     if samples_per_condition < 1:
         raise ValueError('samples_per_condition must be >= 1')
+    if batch_size < 1:
+        raise ValueError('batch_size must be >= 1')
+    if batch_size % samples_per_condition != 0:
+        raise ValueError('batch_size must be divisible by samples_per_condition for efficient batching.')
 
     seed_everything(seed)
+    conditions_per_batch = batch_size // samples_per_condition
 
     condition_types = cfg.ldm_condition_types
     if not condition_types:
@@ -303,37 +313,57 @@ def run_generation(
         max_items = limit_num_items,
     )
 
-    generated = 0
-    for payload in tqdm(payload_iter, total = total_items, desc = 'Sampling'):
+    def process_batch(batch_payloads: List[ConditionPayload]) -> int:
+        cond_stack: Dict[str, List[torch.Tensor]] = defaultdict(list)
+        uncond_stack: Dict[str, List[torch.Tensor]] = defaultdict(list)
+        metadata: List[Tuple[Path, int, str, int]] = []
 
-        cond_input, uncond_input = prepare_condition_inputs(
-            condition_types,
-            payload,
-            empty_text_embed,
-        )
-
-        sub_dir = output_dir / payload.image_id
-        sub_dir.mkdir(parents = True, exist_ok = True)
-
-        for sample_idx in range(samples_per_condition):
-            save_name = f'{payload.image_id}_s{sample_idx:02d}.png'
-            output_path = sub_dir / save_name
-            if skip_existing and output_path.exists():
-                continue
-            image = sample_image(
-                sampler = sampler,
-                vae = vae,
-                cond_input = cond_input,
-                uncond_input = uncond_input,
-                latent_size = latent_size,
-                latent_channels = cfg.autoencoder_z_channels,
-                num_inference_steps = num_inference_steps,
-                guidance_scale = guidance_scale,
-                method = sampler_method,
-                eta = sampler_eta,
+        for payload in batch_payloads:
+            cond_input, uncond_input = prepare_condition_inputs(
+                condition_types,
+                payload,
+                empty_text_embed,
             )
-            image.save(output_path)
-            generated += 1
+            for sample_idx in range(samples_per_condition):
+                save_name = f'{payload.index:06d}_{payload.image_id}_s{sample_idx:02d}.png'
+                output_path = output_dir / save_name
+                if skip_existing and output_path.exists():
+                    continue
+                for key, tensor in cond_input.items():
+                    cond_stack[key].append(tensor)
+                for key, tensor in uncond_input.items():
+                    uncond_stack[key].append(tensor)
+                metadata.append((output_path, payload.index, payload.image_id, sample_idx))
+
+        if not metadata:
+            return 0
+
+        images = sample_batch(
+            sampler = sampler,
+            vae = vae,
+            cond_stack = cond_stack,
+            uncond_stack = uncond_stack,
+            latent_size = latent_size,
+            latent_channels = cfg.autoencoder_z_channels,
+            num_inference_steps = num_inference_steps,
+            guidance_scale = guidance_scale,
+            method = sampler_method,
+            eta = sampler_eta,
+            batch_size = len(metadata),
+        )
+        for img, (path, _, _, _) in zip(images, metadata):
+            img.save(path)
+        return len(metadata)
+
+    generated = 0
+    batch_payloads: List[ConditionPayload] = []
+    for payload in tqdm(payload_iter, total = total_items, desc = 'Sampling'):
+        batch_payloads.append(payload)
+        if len(batch_payloads) == conditions_per_batch:
+            generated += process_batch(batch_payloads)
+            batch_payloads.clear()
+    if batch_payloads:
+        generated += process_batch(batch_payloads)
 
     print(f'Finished sampling {generated} images into {output_dir}')
 
@@ -346,6 +376,7 @@ if __name__ == '__main__':
     LDM_CKPT = 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth'
     OUTPUT_DIR = 'generated/batch_conditions'
 
+    BATCH_SIZE = 32
     SAMPLES_PER_CONDITION = 2
     GUIDANCE_SCALE = 1.0
     NUM_INFERENCE_STEPS = 20
@@ -362,6 +393,7 @@ if __name__ == '__main__':
         vqvae_ckpt = Path(VQVAE_CKPT),
         ldm_ckpt = Path(LDM_CKPT),
         output_dir = Path(OUTPUT_DIR),
+        batch_size = BATCH_SIZE,
         samples_per_condition = SAMPLES_PER_CONDITION,
         guidance_scale = GUIDANCE_SCALE,
         num_inference_steps = NUM_INFERENCE_STEPS,

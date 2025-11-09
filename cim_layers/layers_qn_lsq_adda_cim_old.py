@@ -14,7 +14,7 @@ from torch import nn
 from cim_layers.quant_noise_utils import *
 from cim_layers.layers_utils_lsq import *
 from cim_layers.layers_utils_adda import *
-from cim_layers.bitsplit import bitsplit_ext
+
 
 # from memory_profiler import profile
 
@@ -265,7 +265,7 @@ class Conv2d_lsq_adda_cim(nn.Conv2d):
             # ===================== #
             # 输入 bit 拆分
             # ===================== #
-            x_expanded = bitsplit_ext.bit_split(x_q = x_q,
+            x_expanded = bit_split_tensor(x_q = x_q,
                                           x_bit = self.input_bit,
                                           slice_bit = self.slice_bit)
             # ===================== #
@@ -490,7 +490,7 @@ class Linear_lsq_adda_cim(nn.Linear):
             # ===================== #
             # 输入 bit 拆分
             # ===================== #
-            x_expanded = bitsplit_ext.bit_split(x_q = x_q,
+            x_expanded = bit_split_tensor(x_q = x_q,
                                           x_bit = self.input_bit,
                                           slice_bit = self.slice_bit)
             # ===================== #

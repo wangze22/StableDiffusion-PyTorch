@@ -14,9 +14,11 @@ from torch import nn
 from cim_layers.quant_noise_utils import *
 from cim_layers.layers_utils_lsq import *
 from cim_layers.layers_utils_adda import *
-
+from cim_layers.bitsplit import bitsplit_ext
 
 # from memory_profiler import profile
+
+
 # ====================================================================== #
 # Customized nn.Module layers for quantization and noise adding
 # ====================================================================== #
@@ -242,76 +244,10 @@ class Conv2d_lsq_adda_cim(nn.Conv2d):
         out_adc = round_pass(out_adc)
         return out_adc
 
-    # def cal_x_bitwise(self, x_expanded, w_qn, start_col, col_num):
-    #     # x_expanded: [bit_len_batch, in_rows, L]
-    #     # w_qn:       [in_rows, col_num]
-    #     out_ = torch.matmul(x_expanded.permute(0, 2, 1), w_qn)
-    #
-    #     # 把 None/缺失/False 都视为未初始化
-    #     if not bool(getattr(self, "_adc_gain_inited", False)):
-    #         init_adc_gain(self, out_, self.adc_adjust_mode)
-    #         # 显式写成 True（不是张量）
-    #         self._adc_gain_inited = True
-    #
-    #     out_adc = self.adc_scale * out_
-    #     out_adc = add_adc_noise(self, out_adc, start_col, col_num)
-    #     out_adc = torch.clamp(out_adc, min = -self.adc_range - 1, max = self.adc_range)
-    #     out_adc = round_pass(out_adc)
-    #     return out_adc
-
     # @profile
     def refresh_adc_params(self):
         self.adc_range = 2 ** (self.adc_bit - 1) - 1
         self.adc_scale = get_adc_scale(self, self.adc_gain, mode = self.adc_adjust_mode)
-
-    # def _load_from_state_dict(
-    #         self,
-    #         state_dict,
-    #         prefix,
-    #         local_metadata,
-    #         strict,
-    #         missing_keys,
-    #         unexpected_keys,
-    #         error_msgs,
-    #         ):
-    #     """
-    #     从 checkpoint 加载时，若发现对应参数已存在，则把“已初始化”标记设为 True，
-    #     这样 forward 里就不会重复初始化（避免同步 & 重置）。
-    #     """
-    #     # 1) adc_gain
-    #     key_adc = prefix + "adc_gain"
-    #     if key_adc in state_dict:
-    #         # 如果你想更严格，只在值 != adc_gain_min 时才置 True，可反注释下面 3 行：
-    #         # try:
-    #         #     loaded = float(state_dict[key_adc].detach().cpu().reshape(()))
-    #         #     self._adc_gain_inited = (loaded != self.adc_gain_min)
-    #         # except Exception:
-    #         #     self._adc_gain_inited = True
-    #         self._adc_gain_inited = True  # 默认：带了就认为已初始化
-    #
-    #     # 2) step sizes
-    #     key_sin = prefix + "step_size_input"
-    #     key_sout = prefix + "step_size_output"
-    #     key_sw = prefix + "step_size_weight"
-    #
-    #     if key_sin in state_dict:
-    #         # 同样可做“值是否为 1.0”的严格判断，这里默认带了就视为已初始化
-    #         self._inited_step_size_input = True
-    #     if key_sout in state_dict:
-    #         self._inited_step_size_output = True
-    #     if key_sw in state_dict:
-    #         self._inited_step_size_weight = True
-    #
-    #     # 3) 交给父类做实际参数加载
-    #     super()._load_from_state_dict(
-    #         state_dict,
-    #         prefix,
-    #         local_metadata,
-    #         strict,
-    #         missing_keys,
-    #         unexpected_keys,
-    #         error_msgs,
-    #         )
 
     # @profile
     def forward(self, x):
@@ -329,7 +265,7 @@ class Conv2d_lsq_adda_cim(nn.Conv2d):
             # ===================== #
             # 输入 bit 拆分
             # ===================== #
-            x_expanded = bit_split_tensor(x_q = x_q,
+            x_expanded = bitsplit_ext.bit_split(x_q = x_q,
                                           x_bit = self.input_bit,
                                           slice_bit = self.slice_bit)
             # ===================== #
@@ -472,7 +408,7 @@ class Linear_lsq_adda_cim(nn.Linear):
 
     # @profile
     def gen_output_tensor(self, x_2d):
-        batch_num = x_2d.shape[0]
+        batch_num = x_2d.shape[0] // self.bit_slices
         output_concated = torch.zeros([batch_num,
                                        self.out_features],
                                       device = self.weight.device)
@@ -483,7 +419,7 @@ class Linear_lsq_adda_cim(nn.Linear):
         return weight_2d
 
     # @profile
-    def cal_x_weight_block(self, x_q, w_qn):
+    def cal_x_weight_block(self, x_expanded, w_qn):
         # ===================== #
         # 权重 输入 2D 展开
         # ===================== #
@@ -491,7 +427,7 @@ class Linear_lsq_adda_cim(nn.Linear):
         # ===================== #
         # 生成 2D 计算结果矩阵
         # ===================== #
-        output_concat = self.gen_output_tensor(x_q)
+        output_concat = self.gen_output_tensor(x_expanded)
         # ===================== #
         # 逐个 mapping 位置计算
         # ===================== #
@@ -503,7 +439,7 @@ class Linear_lsq_adda_cim(nn.Linear):
             # ===================== #
             # 输入数据提取
             # ===================== #
-            x_split = x_q[:, start_row:start_row + row_num]
+            x_split = x_expanded[:, start_row:start_row + row_num]
             # ===================== #
             # 权重提取
             # ===================== #
@@ -524,16 +460,10 @@ class Linear_lsq_adda_cim(nn.Linear):
 
 
     # @profile
-    def cal_x_bitwise(self, x_split, w_qn, start_col, col_num):
-        # ===================== #
-        # 输入 bit 拆分
-        # ===================== #
-        x_split = bit_split_tensor(
-            x_q = x_split,
-            x_bit = self.input_bit,
-            slice_bit = self.slice_bit
-            )
-        out_ = torch.matmul(x_split, w_qn)
+    def cal_x_bitwise(self, x_expanded, w_qn, start_col, col_num):
+        bit_len_batch = x_expanded.shape[0]
+        x_rows = x_expanded.shape[1]
+        out_ = torch.matmul(x_expanded, w_qn)
         if self.adc_gain == self.adc_gain_min:
             init_adc_gain(self,out_, self.adc_adjust_mode)
         out_adc = self.adc_scale * out_
@@ -558,13 +488,19 @@ class Linear_lsq_adda_cim(nn.Linear):
             # ===================== #
             x_q, in_scale = input_quant(self, x, isint = True)
             # ===================== #
+            # 输入 bit 拆分
+            # ===================== #
+            x_expanded = bitsplit_ext.bit_split(x_q = x_q,
+                                          x_bit = self.input_bit,
+                                          slice_bit = self.slice_bit)
+            # ===================== #
             # 权重截断&量化 + 噪声
             # ===================== #
             w_qn, w_scale = weight_quant_noise(self, isint = True)
             # ===================== #
             # 计算
             # ===================== #
-            x = self.cal_x_weight_block(x_q, w_qn)
+            x = self.cal_x_weight_block(x_expanded, w_qn)
             # ===================== #
             # 量化系数还原
             # ===================== #

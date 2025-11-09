@@ -21,3 +21,4 @@ import cim_layers.layers_512k as l_512k
 import cim_layers.layers_qn_lsq_adda_cim_row_split as l_adda_cim_row_split
 import cim_layers.layers_lsq_int as l_lsq_int
 import cim_layers.layers_qn_lsq_adda_cim_opt as l_adda_cim_opt
+import cim_layers.layers_qn_lsq_adda_cim_old as l_adda_cim_old

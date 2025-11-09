@@ -51,7 +51,7 @@ def input_quant(module, x, isint):
 
 
 def weight_quant_noise(module, isint):
-    w_qn = module.weight
+    w_q = module.weight
     w_scale = 1.0
     if module.weight_quant:
         if module.step_size_weight == 1:
@@ -64,7 +64,7 @@ def weight_quant_noise(module, isint):
             step_size = module.step_size_weight,
             isint = isint,
             )
-        w_qn = add_noise(w_q, n_scale = module.noise_scale)
+    w_qn = add_noise(w_q, n_scale = module.noise_scale)
     return w_qn, w_scale
 
 
@@ -81,92 +81,3 @@ def output_quant(module, x, isint):
             isint = isint,
             )
     return x, x_scale
-
-#
-# import math
-# import torch
-#
-#
-# def _maybe_mark_inited_from_loaded(step_param, flag_name: str, module):
-#     """
-#     若 step_param 已从 checkpoint 加载为 “非 1.0”，但 flag 未设置，则将 flag 置 True，避免重新初始化。
-#     仅在首次检查时做一次 CPU 同步用于判断（detach().cpu()），之后不再同步。
-#     """
-#     if getattr(module, flag_name, None):
-#         return  # 已经标记过
-#
-#     # 仅在首次进入时检查一次
-#     if torch.is_tensor(step_param) and step_param.numel() == 1:
-#         v = float(step_param.detach().cpu())  # 一次性同步
-#         if not math.isclose(v, 1.0, rel_tol = 0.0, abs_tol = 1e-12):
-#             setattr(module, flag_name, True)  # 认为是从权重中加载的有效步长
-#             return
-#     # 否则保持 flag 缺省/False，交由后续初始化逻辑处理
-#
-#
-# def input_quant(module, x, isint):
-#     x_scale = 1.0
-#     if module.input_quant:
-#         # 1) 若 checkpoint 已把 step_size_input 设成非 1，但 flag 未置位，则自动置位
-#         _maybe_mark_inited_from_loaded(module.step_size_input, "_inited_step_size_input", module)
-#
-#         # 2) 如仍未初始化，则按需要初始化一次（使用当前 x）
-#         if not getattr(module, "_inited_step_size_input", False):
-#             with torch.no_grad():
-#                 module.step_size_input.data = init_step_size(x, module.input_bit)
-#             setattr(module, "_inited_step_size_input", True)
-#
-#         # 3) 量化
-#         x, x_scale = data_quant_lsq(
-#             data_float = x,
-#             data_bit = module.input_bit,
-#             step_size = module.step_size_input,
-#             isint = isint,
-#             )
-#     return x, x_scale
-#
-#
-# def weight_quant_noise(module, isint):
-#     w_qn = module.weight
-#     w_scale = 1.0
-#     if module.weight_quant:
-#         # 1) 若 checkpoint 已把 step_size_weight 设成非 1，但 flag 未置位，则自动置位
-#         _maybe_mark_inited_from_loaded(module.step_size_weight, "_inited_step_size_weight", module)
-#
-#         # 2) 如仍未初始化，则按需要初始化一次（使用当前 weight）
-#         if not getattr(module, "_inited_step_size_weight", False):
-#             with torch.no_grad():
-#                 module.step_size_weight.data = init_step_size(module.weight, module.weight_bit)
-#             setattr(module, "_inited_step_size_weight", True)
-#
-#         # 3) 权重量化 + 噪声
-#         w_q, w_scale = weight_quant_lsq(
-#             data_float = module.weight,
-#             data_bit = module.weight_bit,
-#             step_size = module.step_size_weight,
-#             isint = isint,
-#             )
-#         w_qn = add_noise(w_q, n_scale = module.noise_scale)
-#     return w_qn, w_scale
-#
-#
-# def output_quant(module, x, isint):
-#     x_scale = 1.0
-#     if module.output_quant:
-#         # 1) 若 checkpoint 已把 step_size_output 设成非 1，但 flag 未置位，则自动置位
-#         _maybe_mark_inited_from_loaded(module.step_size_output, "_inited_step_size_output", module)
-#
-#         # 2) 如仍未初始化，则按需要初始化一次（使用当前 x）
-#         if not getattr(module, "_inited_step_size_output", False):
-#             with torch.no_grad():
-#                 module.step_size_output.data = init_step_size(x, module.output_bit)
-#             setattr(module, "_inited_step_size_output", True)
-#
-#         # 3) 量化
-#         x, x_scale = data_quant_lsq(
-#             data_float = x,
-#             data_bit = module.output_bit,
-#             step_size = module.step_size_output,
-#             isint = isint,
-#             )
-#     return x, x_scale
