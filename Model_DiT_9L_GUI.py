@@ -27,6 +27,7 @@ from cim_qn_train.progressive_qn_train import *
 import cim_layers.register_dict as reg_dict
 import config.andi_config as andi_cfg
 from models.transformer import DIT
+from cim_weight_mapper.weight_process import map_weight_for_model
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -169,10 +170,10 @@ def sample_with_mask_and_prompt(
                 xt,
                 cond_input,
                 uncond_input,
-                steps=num_inference_steps,
-                method=method,
-                eta=eta,
-            )
+                steps = num_inference_steps,
+                method = method,
+                eta = eta,
+                )
             # Decode final latent
             ims = vae.decode(xt)
             ims = torch.clamp(ims, -1., 1.).detach().cpu()
@@ -198,7 +199,6 @@ def load_models_and_configs(
     # Tokenizer and text model
     with torch.no_grad():
         text_tokenizer, text_model = get_tokenizer_and_model(cfg.ldm_text_condition_text_embed_model, device = device)
-
 
     # VQVAE
     autoencoder_config = {
@@ -655,8 +655,8 @@ class MaskPainterGUI:
         if self.tool_mode == 'liquify':
             feather_radius = max(1, int(round(self.brush_radius * 0.5)))
             self.brush_info_var.set(
-                f'Mode: Liquify | radius: {self.brush_radius}px | feather radius: {feather_radius}px'
-            )
+                f'Mode: Liquify | radius: {self.brush_radius}px | feather radius: {feather_radius}px',
+                )
             try:
                 self.brush_label_var.set('Current: Liquify')
             except Exception:
@@ -687,8 +687,8 @@ class MaskPainterGUI:
             inner_r = max(1, int(round(self.brush_radius * 0.5)))
             self.brush_preview.create_oval(cx - r, cy - r, cx + r, cy + r, outline = outline, width = 2)
             self.brush_preview.create_oval(
-                cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r, outline = outline, width = 1, dash = (4, 3)
-            )
+                cx - inner_r, cy - inner_r, cx + inner_r, cy + inner_r, outline = outline, width = 1, dash = (4, 3),
+                )
             arrow_len = max(12, r)
             self.brush_preview.create_line(
                 cx - arrow_len * 0.6,
@@ -698,13 +698,13 @@ class MaskPainterGUI:
                 fill = outline,
                 width = 2,
                 arrow = tk.LAST,
-            )
+                )
             self.brush_preview.create_text(
-                cx, cy - 12, text = 'Liquify', fill = outline, font = ('Arial', 11, 'bold')
-            )
+                cx, cy - 12, text = 'Liquify', fill = outline, font = ('Arial', 11, 'bold'),
+                )
             self.brush_preview.create_text(
-                cx, cy + 14, text = f'{self.brush_radius}px', fill = outline, font = ('Arial', 10)
-            )
+                cx, cy + 14, text = f'{self.brush_radius}px', fill = outline, font = ('Arial', 10),
+                )
             return
         # Circle color uses current class palette color for better intuition
         color_idx = max(0, min(self.current_class_id, len(palette) - 1))
@@ -1002,6 +1002,34 @@ if __name__ == '__main__':
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
     model.load_state_dict(torch.load(ldm_ckpt))
+    # ======================================================================= #
+    # ADDA 模型
+    # ======================================================================= #
+    trainer.convert_to_layers(
+        convert_layer_type_list = reg_dict.custom_layers,
+        tar_layer_type = 'layers_qn_lsq_adda_cim',
+        noise_scale = andi_cfg.adda_noise_range[0],
+        input_bit = andi_cfg.adda_input_bit_range[0],
+        output_bit = andi_cfg.adda_output_bit_range[0],
+        weight_bit = andi_cfg.adda_weight_bit_range[0],
+        dac_bit = 5,
+        adc_bit = 8,
+        adc_gain_1_scale = 9.071428571,
+        adc_gain_range = [1 / 64, 1 / 64],  # 8-bit ADC 情况下，增益不可调
+        adc_adjust_mode = 'current',
+        )
+    ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
+    model.load_state_dict(torch.load(ldm_ckpt))
+    # trainer.update_layer_parameter(
+    #     update_layer_type_list = ['layers_qn_lsq_adda_cim'],
+    #     input_bit = 8,
+    #     )
+    map_weight_for_model(
+        trainer.model,
+        array_device_name = 'TC05_GUI',
+        array_size = [576, 2048],
+        weight_block_size = [576, 2048],
+        draw_weight_block = False,
+        )
 
     main(model, vqvae_ckpt)
-

@@ -1324,14 +1324,14 @@ class ProgressiveTrain():
         train_model_params = set(train_model_signature.parameters.keys())
         # Filter kwargs to retain only those needed for train_model
         train_model_kwargs = {k: v for k, v in kwargs.items() if k in train_model_params}
-
+        self.current_cyc = start_cycle
         for cyc in range(qn_cycle):
             # Skip cycles until start_cycle is reached
             if cyc < start_cycle:
                 for param, step in steps_dict.items():
                     current_para_dict[param] += step  # Update current values
                 continue
-
+            self.current_cyc = cyc
             # Round the values as needed for certain parameters (e.g., integer bit values)
             rounded_params = {
                 key: round(value) if key != 'noise_scale' else value

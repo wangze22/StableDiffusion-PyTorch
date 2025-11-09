@@ -1015,7 +1015,7 @@ if __name__ == '__main__':
     ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-032551/FP/0/ddpm_ckpt_text_image_cond_clip.pth'
     ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-032551/LSQ/0.08/ddpm_ckpt_text_image_cond_clip.pth'
     ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-032551/LSQ_AnDi/0.081633/ddpm_ckpt_text_image_cond_clip.pth'
-    ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-232943/LSQ_AnDi/w4b_0.097959/ddpm_ckpt_text_image_cond_clip.pth'
+    ldm_ckpt = 'runs_DiT_12L_server/ddpm_20251103-232943_save/LSQ_AnDi/w4b_0.097959/ddpm_ckpt_text_image_cond_clip.pth'
     model = DIT(
         im_channels = cfg.autoencoder_z_channels,
         model_config = cfg.dit_model_config,

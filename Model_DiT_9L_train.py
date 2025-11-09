@@ -58,9 +58,9 @@ except (RuntimeError, AttributeError):
 # _FD_RESERVE = 32
 
 
-def gen_run_dir(timestamp, train_stage, noise, w_b):
+def gen_run_dir(timestamp, train_stage, current_cyc, noise, w_b):
     output_root = cfg.train_ldm_output_root
-    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'w{int(w_b)}b_{noise:.5g}'
+    run_dir = Path(output_root) / f'ddpm_{timestamp}' / train_stage / f'cyc_{current_cyc}_w{int(w_b)}b_{noise:.5g}'
     return run_dir
 
 
@@ -122,7 +122,11 @@ class LDM_AnDi(ProgressiveTrain):
 
         run_artifacts: Optional[Dict[str, Path]] = None
         if is_main_process:
-            run_dir = gen_run_dir(timestamp = timestamp, train_stage = andi_cfg.train_stage, noise = self.noise_scale, w_b = self.weight_bit)
+            run_dir = gen_run_dir(timestamp = timestamp,
+                                  train_stage = andi_cfg.train_stage,
+                                  current_cyc = self.current_cyc,
+                                  noise = self.noise_scale,
+                                  w_b = self.weight_bit)
             run_artifacts = create_run_artifacts(run_dir)
             save_config_snapshot_json(run_artifacts['logs_dir'], cfg)
             logger: logging.Logger = run_artifacts['logger']
@@ -273,7 +277,7 @@ class LDM_AnDi(ProgressiveTrain):
             factor = 0.5,
             patience = max(cfg.train_ldm_epochs // 10, 5),
             threshold = 1e-5,
-        )
+            )
         lr_stop_threshold = getattr(cfg, 'train_ldm_lr_stop_threshold', 1e-7)
         smoothed_loss: Optional[float] = None
         if is_main_process:
@@ -439,7 +443,7 @@ class LDM_AnDi(ProgressiveTrain):
                         latest_ckpt_path,
                         epoch_ckpt_path,
                         # ema_latest_ckpt_path,
-                    )
+                        )
 
             if current_lr < lr_stop_threshold:
                 if is_main_process:
@@ -448,7 +452,7 @@ class LDM_AnDi(ProgressiveTrain):
                         current_lr,
                         lr_stop_threshold,
                         epoch_idx + 1,
-                    )
+                        )
                 break
 
         if is_main_process and run_artifacts is not None:
@@ -473,7 +477,6 @@ if cfg.environment == 'server':
     num_workers = 6
 else:
     num_workers = 0
-
 
 # Instantiate the DiT model
 
@@ -575,32 +578,45 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
     trainer.convert_to_layers(
         convert_layer_type_list = reg_dict.custom_layers,
         tar_layer_type = 'layers_qn_lsq_adda_cim',
-        noise_scale = andi_cfg.adda_weight_bit_range[0],
+        noise_scale = andi_cfg.adda_noise_range[0],
         input_bit = andi_cfg.adda_input_bit_range[0],
         output_bit = andi_cfg.adda_output_bit_range[0],
         weight_bit = andi_cfg.adda_weight_bit_range[0],
         dac_bit = andi_cfg.adda_dac_bit_range[0],
         adc_bit = andi_cfg.adda_adc_bit_range[0],
         adc_gain_1_scale = 9.071428571,
-        adc_gain_range = [1/64, 1/64], # 8-bit ADC 情况下，增益不可调
-        adc_adjust_mode = 'current'
+        adc_gain_range = [1 / 64, 1 / 64],  # 8-bit ADC 情况下，增益不可调
+        adc_adjust_mode = 'current',
         )
 
     cfg.train_ldm_epochs = 500 // andi_cfg.adda_cycle
     cfg.train_ldm_batch_size = 16
-    map_weight_for_model(trainer.model,
-                         array_device_name = 'TC05',
-                         array_size = [576,2048],
-                         weight_block_size = [576,2048],
-                         draw_weight_block = False)
+    map_weight_for_model(
+        trainer.model,
+        array_device_name = 'TC05',
+        array_size = [576, 2048],
+        weight_block_size = [576, 2048],
+        draw_weight_block = False,
+        )
+
+    if cfg.environment == 'server':
+        model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
+    else:
+        model_paths_ldm_ckpt_resume = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
+    state_dict = torch.load(model_paths_ldm_ckpt_resume)
+    trainer.model.load_state_dict(state_dict)
+
+
     trainer.progressive_train(
-        qn_cycle = andi_cfg.qna_cycle,
+        qn_cycle = andi_cfg.adda_cycle,
         update_layer_type_list = ['layers_qn_lsq_adda_cim'],
         start_cycle = 0,
         weight_bit_range = andi_cfg.adda_weight_bit_range,
         input_bit_range = andi_cfg.adda_input_bit_range,
         output_bit_range = andi_cfg.adda_output_bit_range,
-        noise_scale_range = andi_cfg.adda_weight_bit_range,
+        noise_scale_range = andi_cfg.adda_noise_range,
+        dac_bit_range = andi_cfg.adda_dac_bit_range,
+        adc_bit_range = andi_cfg.adda_adc_bit_range,
         num_workers = num_workers,
         num_images = num_images,
         local_rank = local_rank, backend = backend,

@@ -20,11 +20,11 @@ qna_noise_range = [0.08, 0.1]
 # ======================= #
 # ADDA 训练参数
 # ======================= #
-adda_cycle = 4
+adda_cycle = 2
 
 adda_weight_bit_range = [4, 4]
 adda_input_bit_range = [8, 5]
 adda_output_bit_range = [8, 8]
 adda_noise_range = [0.08, 0.08]
 adda_adc_bit_range = [8, 8]
-adda_dac_bit_range = [8, 5]
+adda_dac_bit_range = [5, 5]

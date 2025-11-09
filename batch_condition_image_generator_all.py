@@ -25,6 +25,8 @@ from tqdm import tqdm
 
 from dataset.celeb_dataset import CelebDataset
 from models.transformer import DIT
+from models.unet_cond_base_relu import Unet
+
 from models.vqvae import VQVAE
 from scheduler.linear_noise_scheduler import DDIMSampler
 from utils.text_utils import get_tokenizer_and_model, get_text_representation
@@ -72,7 +74,6 @@ def build_dit_model(cfg, ldm_ckpt_path: Path, use_data_parallel: bool) -> torch.
         raise FileNotFoundError(f'Could not find diffusion checkpoint: {ldm_ckpt_path}')
     cfg_name = getattr(cfg, '__name__', '')
     if cfg_name == 'Model_Unet_config':
-        from models.unet_cond_base_relu import Unet  # local import to avoid global dependency
         model = Unet(
             im_channels = cfg.autoencoder_z_channels,
             model_config = cfg.diffusion_model_config,
@@ -442,10 +443,24 @@ def run_generation(
 if __name__ == '__main__':
     # ------------------------------------------------------------------- #
     # All user-facing knobs live here. Update the strings/values directly.
-    CONFIG_MODULE = 'Model_DiT_9L_config'
     VQVAE_CKPT = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
-    LDM_CKPT = 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth'
-    OUTPUT_DIR = 'FID_Images/DiT_9L'
+    RUN_CONFIGS = [
+        {
+            'config_module': 'Model_DiT_9L_config',
+            'ldm_ckpt': 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth',
+            'output_dir': 'FID_Images/DiT_9L',
+        },
+        {
+            'config_module': 'Model_DiT_12L_config',
+            'ldm_ckpt': 'runs_DiT_12L_server/ddpm_20251103-232943_save/LSQ_AnDi/w4b_0.097959/ddpm_ckpt_text_image_cond_clip.pth',
+            'output_dir': 'FID_Images/DiT_12L',
+        },
+        {
+            'config_module': 'Model_Unet_config',
+            'ldm_ckpt': 'runs_Unet_server/ddpm_20251104-133643/LSQ_AnDi/w4b_0.087755/ddpm_ckpt_text_image_cond_clip.pth',
+            'output_dir': 'FID_Images/Unet',
+        },
+    ]
 
     BATCH_SIZE = 32  # Per GPU; total batch grows with the number of GPUs.
     SAMPLES_PER_CONDITION = 2
@@ -454,23 +469,25 @@ if __name__ == '__main__':
     SAMPLER_METHOD = 'quadratic'  # 'linear' or 'quadratic'
     SAMPLER_ETA = 1.0  # 0 -> DDIM, 1 -> DDPM
     SKIP_EXISTING = True
-    LIMIT_NUM_ITEMS = None  # e.g. 100 for quick smoke test
+    LIMIT_NUM_ITEMS = 1000000  # e.g. 100 for quick smoke test
     GLOBAL_SEED = 12345
     # ------------------------------------------------------------------- #
 
-    cfg_module = importlib.import_module(CONFIG_MODULE)
-    run_generation(
-        cfg = cfg_module,
-        vqvae_ckpt = Path(VQVAE_CKPT),
-        ldm_ckpt = Path(LDM_CKPT),
-        output_dir = Path(OUTPUT_DIR),
-        batch_size = BATCH_SIZE,
-        samples_per_condition = SAMPLES_PER_CONDITION,
-        guidance_scale = GUIDANCE_SCALE,
-        num_inference_steps = NUM_INFERENCE_STEPS,
-        sampler_method = SAMPLER_METHOD,
-        sampler_eta = SAMPLER_ETA,
-        skip_existing = SKIP_EXISTING,
-        limit_num_items = LIMIT_NUM_ITEMS,
-        seed = GLOBAL_SEED,
-    )
+    for cfg_settings in RUN_CONFIGS:
+        print(f"\n=== Running {cfg_settings['config_module']} -> {cfg_settings['output_dir']} ===")
+        cfg_module = importlib.import_module(cfg_settings['config_module'])
+        run_generation(
+            cfg = cfg_module,
+            vqvae_ckpt = Path(VQVAE_CKPT),
+            ldm_ckpt = Path(cfg_settings['ldm_ckpt']),
+            output_dir = Path(cfg_settings['output_dir']),
+            batch_size = BATCH_SIZE,
+            samples_per_condition = SAMPLES_PER_CONDITION,
+            guidance_scale = GUIDANCE_SCALE,
+            num_inference_steps = NUM_INFERENCE_STEPS,
+            sampler_method = SAMPLER_METHOD,
+            sampler_eta = SAMPLER_ETA,
+            skip_existing = SKIP_EXISTING,
+            limit_num_items = LIMIT_NUM_ITEMS,
+            seed = GLOBAL_SEED,
+        )
