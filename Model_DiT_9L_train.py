@@ -39,6 +39,7 @@ from datetime import datetime
 from cim_qn_train.progressive_qn_train import *
 import cim_layers.register_dict as reg_dict
 import config.andi_config as andi_cfg
+from cim_weight_mapper.weight_process import map_weight_for_model
 
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
 EMA_DECAY = 0.9999
@@ -548,8 +549,10 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
         )
     trainer.add_enhance_layers(ops_factor = 0.05)
 
-    model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.099184/ddpm_ckpt_text_image_cond_clip.pth'
-
+    if cfg.environment == 'server':
+        model_paths_ldm_ckpt_resume = '/home/SD_pytorch/runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.099184/ddpm_ckpt_text_image_cond_clip.pth'
+    else:
+        model_paths_ldm_ckpt_resume = 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.099184/ddpm_ckpt_text_image_cond_clip.pth'
     state_dict = torch.load(model_paths_ldm_ckpt_resume)
     trainer.model.load_state_dict(state_dict)
 
@@ -579,14 +582,20 @@ def _run_training_pipeline(local_rank: int, backend: str, num_images: Optional[i
         dac_bit = andi_cfg.adda_dac_bit_range[0],
         adc_bit = andi_cfg.adda_adc_bit_range[0],
         adc_gain_1_scale = 9.071428571,
-        adc_gain_range = [1/64, 1/64] # 8-bit ADC 情况下，增益不可调
+        adc_gain_range = [1/64, 1/64], # 8-bit ADC 情况下，增益不可调
+        adc_adjust_mode = 'current'
         )
 
     cfg.train_ldm_epochs = 500 // andi_cfg.adda_cycle
     cfg.train_ldm_batch_size = 16
+    map_weight_for_model(trainer.model,
+                         array_device_name = 'TC05',
+                         array_size = [576,2048],
+                         weight_block_size = [576,2048],
+                         draw_weight_block = False)
     trainer.progressive_train(
         qn_cycle = andi_cfg.qna_cycle,
-        update_layer_type_list = ['layers_qn_lsq'],
+        update_layer_type_list = ['layers_qn_lsq_adda_cim'],
         start_cycle = 0,
         weight_bit_range = andi_cfg.adda_weight_bit_range,
         input_bit_range = andi_cfg.adda_input_bit_range,

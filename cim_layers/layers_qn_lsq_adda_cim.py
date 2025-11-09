@@ -14,7 +14,7 @@ from torch import nn
 from cim_layers.quant_noise_utils import *
 from cim_layers.layers_utils_lsq import *
 from cim_layers.layers_utils_adda import *
-from cim_layers.bitsplit import bitsplit_ext
+
 
 # from memory_profiler import profile
 
@@ -235,6 +235,7 @@ class Conv2d_lsq_adda_cim(nn.Conv2d):
         bit_len_batch = x_expanded.shape[0]
         x_rows = x_expanded.shape[1]
         x_cols = x_expanded.shape[2]
+        # assert torch.all(x_expanded >= 0).item(), "x_expanded contains non-positive values"
         out_ = torch.matmul(x_expanded.permute(0, 2, 1), w_qn)
         if self.adc_gain == self.adc_gain_min:
             init_adc_gain(self, out_, self.adc_adjust_mode)
@@ -265,7 +266,7 @@ class Conv2d_lsq_adda_cim(nn.Conv2d):
             # ===================== #
             # 输入 bit 拆分
             # ===================== #
-            x_expanded = bitsplit_ext.bit_split(x_q = x_q,
+            x_expanded = bit_split_tensor(x_q = x_q,
                                           x_bit = self.input_bit,
                                           slice_bit = self.slice_bit)
             # ===================== #
@@ -408,10 +409,15 @@ class Linear_lsq_adda_cim(nn.Linear):
 
     # @profile
     def gen_output_tensor(self, x_2d):
-        batch_num = x_2d.shape[0] // self.bit_slices
-        output_concated = torch.zeros([batch_num,
-                                       self.out_features],
-                                      device = self.weight.device)
+        # Support N-D inputs: x_2d has shape [bit_len * B, ..., in_features]
+        # We need to recover batch dim B and preserve any extra leading dims
+        # so that the final output matches nn.Linear: [..., out_features]
+        assert x_2d.shape[-1] == self.in_features, "Last dimension must equal in_features"
+        leading_dims = list(x_2d.shape[:-1])  # [bit_len*B, ...]
+        assert leading_dims[0] % self.bit_slices == 0, "Leading dim must be divisible by bit_slices"
+        leading_dims[0] = leading_dims[0] // self.bit_slices  # recover B
+        out_shape = leading_dims + [self.out_features]
+        output_concated = torch.zeros(out_shape, device=self.weight.device, dtype=x_2d.dtype)
         return output_concated
 
     def get_2d_weight(self, weight):
@@ -439,7 +445,7 @@ class Linear_lsq_adda_cim(nn.Linear):
             # ===================== #
             # 输入数据提取
             # ===================== #
-            x_split = x_expanded[:, start_row:start_row + row_num]
+            x_split = x_expanded[..., start_row:start_row + row_num]
             # ===================== #
             # 权重提取
             # ===================== #
@@ -455,7 +461,7 @@ class Linear_lsq_adda_cim(nn.Linear):
             # ===================== #
             # 结果对应位置累加
             # ===================== #
-            output_concat[:, start_col:start_col + col_num] += x
+            output_concat[..., start_col:start_col + col_num] += x
         return output_concat
 
 
@@ -463,6 +469,8 @@ class Linear_lsq_adda_cim(nn.Linear):
     def cal_x_bitwise(self, x_expanded, w_qn, start_col, col_num):
         bit_len_batch = x_expanded.shape[0]
         x_rows = x_expanded.shape[1]
+        # if not torch.all(x_expanded >= 0).item():
+
         out_ = torch.matmul(x_expanded, w_qn)
         if self.adc_gain == self.adc_gain_min:
             init_adc_gain(self,out_, self.adc_adjust_mode)
@@ -490,7 +498,7 @@ class Linear_lsq_adda_cim(nn.Linear):
             # ===================== #
             # 输入 bit 拆分
             # ===================== #
-            x_expanded = bitsplit_ext.bit_split(x_q = x_q,
+            x_expanded = bit_split_tensor(x_q = x_q,
                                           x_bit = self.input_bit,
                                           slice_bit = self.slice_bit)
             # ===================== #

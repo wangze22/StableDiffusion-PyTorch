@@ -408,10 +408,15 @@ class Linear_lsq_adda_cim(nn.Linear):
 
     # @profile
     def gen_output_tensor(self, x_2d):
-        batch_num = x_2d.shape[0] // self.bit_slices
-        output_concated = torch.zeros([batch_num,
-                                       self.out_features],
-                                      device = self.weight.device)
+        # Support N-D inputs: x_2d has shape [bit_len * B, ..., in_features]
+        # We need to recover batch dim B and preserve any extra leading dims
+        # so that the final output matches nn.Linear: [..., out_features]
+        assert x_2d.shape[-1] == self.in_features, "Last dimension must equal in_features"
+        leading_dims = list(x_2d.shape[:-1])  # [bit_len*B, ...]
+        assert leading_dims[0] % self.bit_slices == 0, "Leading dim must be divisible by bit_slices"
+        leading_dims[0] = leading_dims[0] // self.bit_slices  # recover B
+        out_shape = leading_dims + [self.out_features]
+        output_concated = torch.zeros(out_shape, device=self.weight.device, dtype=x_2d.dtype)
         return output_concated
 
     def get_2d_weight(self, weight):
