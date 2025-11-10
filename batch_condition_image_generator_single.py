@@ -6,6 +6,10 @@ The sampling logic mirrors the GUI workflow in ``Model_DiT_9L_GUI.py`` but
 removes all interactive components so that large batches can be rendered
 offline. All configurable knobs live in the block under
 ``if __name__ == '__main__':`` for convenience.
+
+This variant enforces single-GPU execution by always binding to ``cuda:0``.
+Any additional GPUs in the system are ignored so batch sizing is entirely
+driven by the ``BATCH_SIZE`` knob below.
 """
 
 from __future__ import annotations
@@ -32,8 +36,16 @@ from cim_qn_train.progressive_qn_train import ProgressiveTrain
 import cim_layers.register_dict as reg_dict
 
 # torch.backends.cudnn.enabled = False
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-available_gpu_count = torch.cuda.device_count() if device.type == 'cuda' else 0
+PRIMARY_DEVICE_INDEX = 0
+if torch.cuda.is_available():
+    torch.cuda.set_device(PRIMARY_DEVICE_INDEX)
+    device = torch.device(f'cuda:{PRIMARY_DEVICE_INDEX}')
+    detected_gpu_count = torch.cuda.device_count()
+    if detected_gpu_count > 1:
+        print(f'Detected {detected_gpu_count} GPUs, but single-card sampling is enforced (using cuda:{PRIMARY_DEVICE_INDEX}).')
+else:
+    detected_gpu_count = 0
+    device = torch.device('cpu')
 to_pil = ToPILImage()
 
 
@@ -68,7 +80,7 @@ def load_text_components(cfg):
     return tokenizer, model, empty_embed, text_device
 
 
-def build_dit_model(cfg, ldm_ckpt_path: Path, use_data_parallel: bool) -> torch.nn.Module:
+def build_dit_model(cfg, ldm_ckpt_path: Path) -> torch.nn.Module:
     if not ldm_ckpt_path.exists():
         raise FileNotFoundError(f'Could not find diffusion checkpoint: {ldm_ckpt_path}')
     cfg_name = getattr(cfg, '__name__', '')
@@ -97,13 +109,10 @@ def build_dit_model(cfg, ldm_ckpt_path: Path, use_data_parallel: bool) -> torch.
     state_dict = torch.load(str(ldm_ckpt_path), map_location = device)
     model.load_state_dict(state_dict)
     model.eval()
-    if use_data_parallel and available_gpu_count > 1:
-        model = torch.nn.DataParallel(model)
-        model.eval()
     return model
 
 
-def build_vae(cfg, vqvae_ckpt_path: Path, use_data_parallel: bool) -> VQVAE:
+def build_vae(cfg, vqvae_ckpt_path: Path) -> VQVAE:
     if not vqvae_ckpt_path.exists():
         raise FileNotFoundError(f'Could not find VQVAE checkpoint: {vqvae_ckpt_path}')
     autoencoder_config = {
@@ -122,9 +131,6 @@ def build_vae(cfg, vqvae_ckpt_path: Path, use_data_parallel: bool) -> VQVAE:
     vae = VQVAE(im_channels = cfg.dataset_im_channels, model_config = autoencoder_config).to(device)
     vae.load_state_dict(torch.load(str(vqvae_ckpt_path), map_location = device))
     vae.eval()
-    if use_data_parallel and available_gpu_count > 1:
-        vae = torch.nn.DataParallel(vae)
-        vae.eval()
     return vae
 
 
@@ -267,8 +273,7 @@ def sample_batch(
                 method = method,
                 eta = eta,
             )
-            vae_module = vae.module if isinstance(vae, torch.nn.DataParallel) else vae
-            decoded = vae_module.decode(latents)
+            decoded = vae.decode(latents)
             decoded = torch.clamp(decoded, -1.0, 1.0).detach().cpu()
             decoded = (decoded + 1) / 2
             images = [to_pil(sample) for sample in decoded]
@@ -297,16 +302,10 @@ def run_generation(
     if batch_size < 1:
         raise ValueError('batch_size must be >= 1')
 
-    active_gpus = available_gpu_count
-    device_multiplier = max(1, active_gpus)
-    effective_batch_size = batch_size * device_multiplier
+    effective_batch_size = batch_size
 
     if effective_batch_size % samples_per_condition != 0:
-        raise ValueError('batch_size * num_devices must be divisible by samples_per_condition for efficient batching.')
-
-    if active_gpus > 1:
-        print(f'Detected {active_gpus} GPUs. Each GPU will sample {batch_size} images '
-              f'per iteration (effective batch size = {effective_batch_size}).')
+        raise ValueError('batch_size must be divisible by samples_per_condition for efficient batching.')
 
     seed_everything(seed)
     conditions_per_batch = effective_batch_size // samples_per_condition
@@ -317,9 +316,8 @@ def run_generation(
 
     text_tokenizer, text_model, empty_text_embed, text_device = load_text_components(cfg)
 
-    use_data_parallel = active_gpus > 1
-    model = build_dit_model(cfg, ldm_ckpt, use_data_parallel = use_data_parallel)
-    vae = build_vae(cfg, vqvae_ckpt, use_data_parallel = use_data_parallel)
+    model = build_dit_model(cfg, ldm_ckpt)
+    vae = build_vae(cfg, vqvae_ckpt)
     sampler = DDIMSampler(
         model = model,
         beta = (cfg.diffusion_beta_start, cfg.diffusion_beta_end),
@@ -449,9 +447,9 @@ if __name__ == '__main__':
     CONFIG_MODULE = 'Model_DiT_9L_config'
     VQVAE_CKPT = 'runs_VQVAE_noise_server/vqvae_20251028-131331/celebhq/n_scale_0.2000/vqvae_autoencoder_ckpt_latest.pth'
     LDM_CKPT = 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth'
-    OUTPUT_DIR = 'FID_Images/DiT_9L'
+    OUTPUT_DIR = 'FID_Images/DiT_9L-temp'
 
-    BATCH_SIZE = 2  # Per GPU; total batch grows with the number of GPUs.
+    BATCH_SIZE = 2  # Effective batch size (single-GPU script).
     SAMPLES_PER_CONDITION = 2
     GUIDANCE_SCALE = 1.0
     NUM_INFERENCE_STEPS = 20
