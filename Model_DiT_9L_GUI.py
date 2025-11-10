@@ -1019,11 +1019,12 @@ if __name__ == '__main__':
         adc_adjust_mode = 'current',
         )
     ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
+    # ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/checkpoints/epoch_030_ddpm_ckpt_text_image_cond_clip.pth'
     model.load_state_dict(torch.load(ldm_ckpt))
-    # trainer.update_layer_parameter(
-    #     update_layer_type_list = ['layers_qn_lsq_adda_cim'],
-    #     input_bit = 8,
-    #     )
+    trainer.update_layer_parameter(
+        update_layer_type_list = ['layers_qn_lsq_adda_cim'],
+        input_bit = 8,
+        )
     map_weight_for_model(
         trainer.model,
         array_device_name = 'TC05_GUI',

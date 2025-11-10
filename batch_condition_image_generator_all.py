@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import importlib
 import random
+import gc
+import os
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -37,6 +39,15 @@ import cim_layers.register_dict as reg_dict
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 available_gpu_count = torch.cuda.device_count() if device.type == 'cuda' else 0
 to_pil = ToPILImage()
+DEBUG_MEM = False
+
+
+def _sync_cuda() -> None:
+    if torch.cuda.is_available():
+        try:
+            torch.cuda.synchronize()
+        except Exception:
+            pass
 
 
 def seed_everything(seed: Optional[int]) -> None:
@@ -57,16 +68,53 @@ def _latent_size(cfg) -> int:
     return cfg.dataset_im_size // (2 ** downsample_count)
 
 
+def _release_cuda_modules(*modules) -> None:
+    """Move heavy modules back to CPU and flush CUDA caches."""
+    if not torch.cuda.is_available():
+        return
+    for module in modules:
+        if module is None:
+            continue
+        target = module.module if isinstance(module, torch.nn.DataParallel) else module
+        if hasattr(target, 'to'):
+            try:
+                target.to('cpu')
+            except Exception:
+                pass
+    gc.collect()
+    try:
+        torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
+def _log_cuda(prefix: str) -> None:
+    if not torch.cuda.is_available():
+        return
+    try:
+        _sync_cuda()
+        if not DEBUG_MEM:
+            return
+        alloc = torch.cuda.memory_allocated() / (1024 ** 2)
+        reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+        max_alloc = torch.cuda.max_memory_allocated() / (1024 ** 2)
+        print(f'[CUDA][{prefix}] alloc={alloc:.1f}MB reserved={reserved:.1f}MB max_alloc={max_alloc:.1f}MB')
+    except Exception as exc:
+        if DEBUG_MEM:
+            print(f'[CUDA][{prefix}] unable to read stats: {exc}')
+
+
 def load_text_components(cfg):
     if 'text' not in cfg.ldm_condition_types:
-        return None, None, None
+        return None, None, None, None
+    text_device = torch.device('cpu')
     with torch.no_grad():
         tokenizer, model = get_tokenizer_and_model(
             cfg.ldm_text_condition_text_embed_model,
-            device = device,
+            device = text_device,
         )
-        empty_embed = get_text_representation([''], tokenizer, model, device)
-    return tokenizer, model, empty_embed
+        empty_embed = get_text_representation([''], tokenizer, model, text_device).cpu()
+    return tokenizer, model, empty_embed, text_device
 
 
 def build_dit_model(cfg, ldm_ckpt_path: Path, use_data_parallel: bool) -> torch.nn.Module:
@@ -165,13 +213,20 @@ def gather_condition_payloads(
     cond_types: Iterable[str],
     text_tokenizer,
     text_model,
+    text_device,
     max_items: Optional[int],
+    pending_indices: Optional[List[int]] = None,
 ) -> Iterable[ConditionPayload]:
     text_enabled = 'text' in cond_types
     image_enabled = 'image' in cond_types
     total = len(dataset) if max_items is None else min(len(dataset), max_items)
 
-    for idx in range(total):
+    if pending_indices is not None:
+        index_iter: Iterable[int] = pending_indices
+    else:
+        index_iter = range(total)
+
+    for idx in index_iter:
         image_path = Path(dataset.images[idx])
         prompt = None
         prompt_embed = None
@@ -181,11 +236,13 @@ def gather_condition_payloads(
             caption_path = dataset.texts[idx]
             prompt = read_first_caption(caption_path)
             with torch.no_grad():
-                prompt_embed = get_text_representation([prompt], text_tokenizer, text_model, device)
+                # Keep prompt embeddings on CPU until batching to avoid long-lived CUDA tensors.
+                embed_device = text_device if text_device is not None else device
+                prompt_embed = get_text_representation([prompt], text_tokenizer, text_model, embed_device).cpu()
 
         if image_enabled:
             mask_tensor = dataset.get_mask(idx).float()
-            mask = mask_tensor.unsqueeze(0).to(device)
+            mask = mask_tensor.unsqueeze(0)
 
         yield ConditionPayload(
             index = idx,
@@ -217,6 +274,54 @@ def prepare_condition_inputs(
     return cond_input, uncond_input
 
 
+def _compute_pending_indices(
+    output_dir: Path,
+    total_items: int,
+    samples_per_condition: int,
+    skip_existing: bool,
+) -> Optional[List[int]]:
+    if not skip_existing or total_items == 0:
+        return None
+    if not output_dir.exists():
+        return None
+
+    counts: Dict[int, int] = {}
+    try:
+        with os.scandir(output_dir) as entries:
+            for entry in entries:
+                if not entry.is_file():
+                    continue
+                name = entry.name
+                if not name.endswith('.png'):
+                    continue
+                try:
+                    idx = int(name.split('_', 1)[0])
+                except ValueError:
+                    continue
+                if 0 <= idx < total_items:
+                    counts[idx] = counts.get(idx, 0) + 1
+    except FileNotFoundError:
+        return None
+
+    if not counts:
+        return None
+
+    pending_mask = [True] * total_items
+    finished = 0
+    for idx, cnt in counts.items():
+        if cnt >= samples_per_condition:
+            pending_mask[idx] = False
+            finished += 1
+
+    if finished == 0:
+        return None
+
+    pending_indices = [idx for idx, keep in enumerate(pending_mask) if keep]
+    if len(pending_indices) == total_items:
+        return None
+    return pending_indices
+
+
 def sample_batch(
     sampler: DDIMSampler,
     vae: VQVAE,
@@ -230,8 +335,19 @@ def sample_batch(
     eta: float,
     batch_size: int,
 ) -> List[Image.Image]:
-    cond_input = {key: torch.cat(tensors, dim = 0).to(device) for key, tensors in cond_stack.items()}
-    uncond_input = {key: torch.cat(tensors, dim = 0).to(device) for key, tensors in uncond_stack.items()}
+    if DEBUG_MEM:
+        total_stack = sum(len(v) for v in cond_stack.values())
+        print(f'[DEBUG] sample_batch start | batch_size={batch_size} stacked={total_stack}')
+        _log_cuda('before_cat')
+    cond_input = {
+        key: torch.cat(tensors, dim = 0).to(device, non_blocking = True)
+        for key, tensors in cond_stack.items()
+    }
+    uncond_input = {
+        key: torch.cat(tensors, dim = 0).to(device, non_blocking = True)
+        for key, tensors in uncond_stack.items()
+    }
+    _log_cuda('after_cat')
 
     xt = torch.randn(
         (batch_size, latent_channels, latent_size, latent_size),
@@ -257,6 +373,7 @@ def sample_batch(
     sampler.model = _GuidedWrapper(original_model)
     try:
         with torch.no_grad():
+            _log_cuda('before_sampler')
             latents = sampler.forward(
                 xt,
                 cond_input,
@@ -265,14 +382,26 @@ def sample_batch(
                 method = method,
                 eta = eta,
             )
+            _log_cuda('after_sampler')
             vae_module = vae.module if isinstance(vae, torch.nn.DataParallel) else vae
             decoded = vae_module.decode(latents)
+            del latents
+            _log_cuda('after_decode')
             decoded = torch.clamp(decoded, -1.0, 1.0).detach().cpu()
             decoded = (decoded + 1) / 2
             images = [to_pil(sample) for sample in decoded]
         return images
     finally:
         sampler.model = original_model
+        if hasattr(sampler, 'cond_input'):
+            sampler.cond_input = None
+        if hasattr(sampler, 'uncond_input'):
+            sampler.uncond_input = None
+        del cond_input
+        del uncond_input
+        del xt
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 def run_generation(
@@ -313,7 +442,7 @@ def run_generation(
     if not condition_types:
         raise ValueError('At least one condition type must be enabled in the config.')
 
-    text_tokenizer, text_model, empty_text_embed = load_text_components(cfg)
+    text_tokenizer, text_model, empty_text_embed, text_device = load_text_components(cfg)
 
     use_data_parallel = active_gpus > 1
     model = build_dit_model(cfg, ldm_ckpt, use_data_parallel = use_data_parallel)
@@ -324,120 +453,159 @@ def run_generation(
         T = cfg.diffusion_num_timesteps,
     )
 
-    dataset = build_dataset(cfg)
-    total_items = len(dataset)
-    if limit_num_items is not None:
-        total_items = min(total_items, limit_num_items)
-
-    output_dir.mkdir(parents = True, exist_ok = True)
-
-    # Write sampling configuration into OUTPUT_DIR as YAML
+    dataset = None
+    payload_iter = None
     try:
-        import yaml  # type: ignore
-    except Exception:
-        yaml = None  # Fallback to manual writer if PyYAML is unavailable
+        dataset = build_dataset(cfg)
+        total_items = len(dataset)
+        if limit_num_items is not None:
+            total_items = min(total_items, limit_num_items)
 
-    config_data = {
-        'CONFIG_MODULE': getattr(cfg, '__name__', str(cfg)),
-        'VQVAE_CKPT': str(vqvae_ckpt),
-        'LDM_CKPT': str(ldm_ckpt),
-        'OUTPUT_DIR': str(output_dir),
-        'BATCH_SIZE': batch_size,
-        'SAMPLES_PER_CONDITION': samples_per_condition,
-        'GUIDANCE_SCALE': guidance_scale,
-        'NUM_INFERENCE_STEPS': num_inference_steps,
-        'SAMPLER_METHOD': sampler_method,
-        'SAMPLER_ETA': sampler_eta,
-        'SKIP_EXISTING': skip_existing,
-        'LIMIT_NUM_ITEMS': limit_num_items,
-        'GLOBAL_SEED': seed,
-    }
-    config_path = output_dir / 'sampling_config.yaml'
-    if yaml is not None:
-        try:
-            with open(config_path, 'w', encoding='utf-8') as f:
-                yaml.safe_dump(config_data, f, sort_keys = False, allow_unicode = True)
-        except Exception:
-            yaml = None  # Fall back to manual writer below
-
-    if yaml is None:
-        def _to_yaml_literal(val):
-            if isinstance(val, bool):
-                return 'true' if val else 'false'
-            if val is None:
-                return 'null'
-            if isinstance(val, (int, float)):
-                return str(val)
-            s = str(val).replace("'", "''")
-            return f"'{s}'"
-
-        with open(config_path, 'w', encoding='utf-8') as f:
-            for k, v in config_data.items():
-                f.write(f"{k}: {_to_yaml_literal(v)}\n")
-
-    latent_size = _latent_size(cfg)
-
-    payload_iter = gather_condition_payloads(
-        dataset = dataset,
-        cond_types = condition_types,
-        text_tokenizer = text_tokenizer,
-        text_model = text_model,
-        max_items = limit_num_items,
-    )
-
-    def process_batch(batch_payloads: List[ConditionPayload]) -> int:
-        cond_stack: Dict[str, List[torch.Tensor]] = defaultdict(list)
-        uncond_stack: Dict[str, List[torch.Tensor]] = defaultdict(list)
-        metadata: List[Tuple[Path, int, str, int]] = []
-
-        for payload in batch_payloads:
-            cond_input, uncond_input = prepare_condition_inputs(
-                condition_types,
-                payload,
-                empty_text_embed,
-            )
-            for sample_idx in range(samples_per_condition):
-                save_name = f'{payload.index:06d}_{payload.image_id}_s{sample_idx:02d}.png'
-                output_path = output_dir / save_name
-                if skip_existing and output_path.exists():
-                    continue
-                for key, tensor in cond_input.items():
-                    cond_stack[key].append(tensor)
-                for key, tensor in uncond_input.items():
-                    uncond_stack[key].append(tensor)
-                metadata.append((output_path, payload.index, payload.image_id, sample_idx))
-
-        if not metadata:
-            return 0
-
-        images = sample_batch(
-            sampler = sampler,
-            vae = vae,
-            cond_stack = cond_stack,
-            uncond_stack = uncond_stack,
-            latent_size = latent_size,
-            latent_channels = cfg.autoencoder_z_channels,
-            num_inference_steps = num_inference_steps,
-            guidance_scale = guidance_scale,
-            method = sampler_method,
-            eta = sampler_eta,
-            batch_size = len(metadata),
+        output_dir.mkdir(parents = True, exist_ok = True)
+        pending_indices = _compute_pending_indices(
+            output_dir = output_dir,
+            total_items = total_items,
+            samples_per_condition = samples_per_condition,
+            skip_existing = skip_existing,
         )
-        for img, (path, _, _, _) in zip(images, metadata):
-            img.save(path)
-        return len(metadata)
+        if pending_indices is not None:
+            print(f'[SKIP] {total_items - len(pending_indices)} items already completed; {len(pending_indices)} remain.')
+            if not pending_indices:
+                print('Nothing left to sample. Skipping run.')
+                return
 
-    generated = 0
-    batch_payloads: List[ConditionPayload] = []
-    for payload in tqdm(payload_iter, total = total_items, desc = 'Sampling'):
-        batch_payloads.append(payload)
-        if len(batch_payloads) == conditions_per_batch:
+        # Write sampling configuration into OUTPUT_DIR as YAML
+        try:
+            import yaml  # type: ignore
+        except Exception:
+            yaml = None  # Fallback to manual writer if PyYAML is unavailable
+
+        config_data = {
+            'CONFIG_MODULE': getattr(cfg, '__name__', str(cfg)),
+            'VQVAE_CKPT': str(vqvae_ckpt),
+            'LDM_CKPT': str(ldm_ckpt),
+            'OUTPUT_DIR': str(output_dir),
+            'BATCH_SIZE': batch_size,
+            'SAMPLES_PER_CONDITION': samples_per_condition,
+            'GUIDANCE_SCALE': guidance_scale,
+            'NUM_INFERENCE_STEPS': num_inference_steps,
+            'SAMPLER_METHOD': sampler_method,
+            'SAMPLER_ETA': sampler_eta,
+            'SKIP_EXISTING': skip_existing,
+            'LIMIT_NUM_ITEMS': limit_num_items,
+            'GLOBAL_SEED': seed,
+        }
+        config_path = output_dir / 'sampling_config.yaml'
+        if yaml is not None:
+            try:
+                with open(config_path, 'w', encoding='utf-8') as f:
+                    yaml.safe_dump(config_data, f, sort_keys = False, allow_unicode = True)
+            except Exception:
+                yaml = None  # Fall back to manual writer below
+
+        if yaml is None:
+            def _to_yaml_literal(val):
+                if isinstance(val, bool):
+                    return 'true' if val else 'false'
+                if val is None:
+                    return 'null'
+                if isinstance(val, (int, float)):
+                    return str(val)
+                s = str(val).replace("'", "''")
+                return f"'{s}'"
+
+            with open(config_path, 'w', encoding='utf-8') as f:
+                for k, v in config_data.items():
+                    f.write(f"{k}: {_to_yaml_literal(v)}\n")
+
+        latent_size = _latent_size(cfg)
+
+        payload_iter = gather_condition_payloads(
+            dataset = dataset,
+            cond_types = condition_types,
+            text_tokenizer = text_tokenizer,
+            text_model = text_model,
+            text_device = text_device,
+            max_items = limit_num_items,
+            pending_indices = pending_indices,
+        )
+
+        def process_batch(batch_payloads: List[ConditionPayload]) -> int:
+            cond_stack: Dict[str, List[torch.Tensor]] = defaultdict(list)
+            uncond_stack: Dict[str, List[torch.Tensor]] = defaultdict(list)
+            metadata: List[Tuple[Path, int, str, int]] = []
+
+            if DEBUG_MEM:
+                print(f'[DEBUG] process_batch start | payload_count={len(batch_payloads)}')
+                _log_cuda('process_batch_start')
+
+            for payload in batch_payloads:
+                # Quickly decide whether this payload still needs work before loading heavy tensors.
+                missing_samples: List[Tuple[Path, int]] = []
+                for sample_idx in range(samples_per_condition):
+                    save_name = f'{payload.index:06d}_{payload.image_id}_s{sample_idx:02d}.png'
+                    output_path = output_dir / save_name
+                    if skip_existing and output_path.exists():
+                        continue
+                    missing_samples.append((output_path, sample_idx))
+                if not missing_samples:
+                    continue
+
+                cond_input, uncond_input = prepare_condition_inputs(
+                    condition_types,
+                    payload,
+                    empty_text_embed,
+                )
+                for output_path, sample_idx in missing_samples:
+                    for key, tensor in cond_input.items():
+                        cond_stack[key].append(tensor)
+                    for key, tensor in uncond_input.items():
+                        uncond_stack[key].append(tensor)
+                    metadata.append((output_path, payload.index, payload.image_id, sample_idx))
+
+            if not metadata:
+                return 0
+
+            images = sample_batch(
+                sampler = sampler,
+                vae = vae,
+                cond_stack = cond_stack,
+                uncond_stack = uncond_stack,
+                latent_size = latent_size,
+                latent_channels = cfg.autoencoder_z_channels,
+                num_inference_steps = num_inference_steps,
+                guidance_scale = guidance_scale,
+                method = sampler_method,
+                eta = sampler_eta,
+                batch_size = len(metadata),
+            )
+            for img, (path, _, _, _) in zip(images, metadata):
+                img.save(path)
+            _log_cuda('after_sample_batch')
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            return len(metadata)
+
+        generated = 0
+        batch_payloads: List[ConditionPayload] = []
+        total_batches = len(pending_indices) if pending_indices is not None else total_items
+        for payload in tqdm(payload_iter, total = total_batches, desc = 'Sampling'):
+            batch_payloads.append(payload)
+            if len(batch_payloads) == conditions_per_batch:
+                generated += process_batch(batch_payloads)
+                batch_payloads.clear()
+        if batch_payloads:
             generated += process_batch(batch_payloads)
-            batch_payloads.clear()
-    if batch_payloads:
-        generated += process_batch(batch_payloads)
 
-    print(f'Finished sampling {generated} images into {output_dir}')
+        print(f'Finished sampling {generated} images into {output_dir}')
+    finally:
+        payload_iter = None
+        dataset = None
+        _release_cuda_modules(text_model, model, vae, sampler)
+        text_model = None
+        model = None
+        vae = None
+        sampler = None
 
 
 if __name__ == '__main__':
@@ -462,7 +630,7 @@ if __name__ == '__main__':
         },
     ]
 
-    BATCH_SIZE = 32  # Per GPU; total batch grows with the number of GPUs.
+    BATCH_SIZE = 64  # Per GPU; total batch grows with the number of GPUs.
     SAMPLES_PER_CONDITION = 2
     GUIDANCE_SCALE = 1.0
     NUM_INFERENCE_STEPS = 20
@@ -491,3 +659,12 @@ if __name__ == '__main__':
             limit_num_items = LIMIT_NUM_ITEMS,
             seed = GLOBAL_SEED,
         )
+        _release_cuda_modules()
+def _log_cuda(prefix: str) -> None:
+    if not DEBUG_MEM or not torch.cuda.is_available():
+        return
+    torch.cuda.synchronize()
+    alloc = torch.cuda.memory_allocated() / (1024 ** 2)
+    reserved = torch.cuda.memory_reserved() / (1024 ** 2)
+    max_alloc = torch.cuda.max_memory_allocated() / (1024 ** 2)
+    print(f'[CUDA][{prefix}] alloc={alloc:.1f}MB reserved={reserved:.1f}MB max_alloc={max_alloc:.1f}MB')
