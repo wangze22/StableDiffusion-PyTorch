@@ -5,28 +5,49 @@ c_factor = 2.58
 # Dataset configuration
 dataset_name = 'celebhq'
 
-# Auto-detect environment: 'server' if multiple GPUs, else 'local'
+# Auto-detect environment: Windows -> local, Linux -> server, Linux + Orin GPU -> jetson
 import os
-try:
-    import torch  # type: ignore
-    _gpu_count = torch.cuda.device_count()
-except Exception:
-    _gpu_count = 0
-if os.environ.get('CFG_GPU_MSG_PRINTED', '0') != '1':
-    print(f'Detected {_gpu_count} GPUs')
-    os.environ['CFG_GPU_MSG_PRINTED'] = '1'
+import platform
 
-environment = 'server' if _gpu_count > 1 else 'local'
+_os_name = platform.system().lower()
+environment = 'local'
+_gpu_name = ''
+
+if _os_name == 'windows':
+    environment = 'local'
+elif _os_name == 'linux':
+    environment = 'server'
+    try:
+        import torch  # type: ignore
+        if torch.cuda.is_available():
+            _gpu_name = torch.cuda.get_device_name(0)
+            if 'orin' in _gpu_name.lower():
+                environment = 'jetson'
+    except Exception:
+        _gpu_name = ''
+else:
+    environment = 'local'
+
+if os.environ.get('CFG_ENV_MSG_PRINTED', '0') != '1':
+    details = f'os={_os_name}'
+    if _gpu_name:
+        details += f', gpu={_gpu_name}'
+    print(f'Detected environment: {environment} ({details})')
+    os.environ['CFG_ENV_MSG_PRINTED'] = '1'
 
 # Dataset path depends on environment
 if environment == 'server':
     dataset_im_path = '/root/autodl-tmp/CelebAMask-HQ/CelebAMask-HQ'
     train_ldm_output_root = 'runs_DiT_9L_server'
+elif environment == 'jetson':
+    dataset_im_path = '/home/CelebAMask-HQ'
+    train_ldm_output_root = 'runs_DiT_9L_jetson'
 else:
     # Use current working directory as data path when running locally
     dataset_im_path = 'D:/datasets/CelebAMask-HQ/CelebAMask-HQ'
     train_ldm_output_root = 'runs_DiT_9L_PC'
 
+print(f'Environment: {environment}')
 
 dataset_im_channels = 3
 dataset_im_size = 256

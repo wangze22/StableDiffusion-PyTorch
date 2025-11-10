@@ -17,6 +17,7 @@ from PIL import Image, ImageFile
 from torchvision import transforms as T
 from torchvision.models import Inception_V3_Weights, inception_v3
 from tqdm import tqdm
+from pytorch_fid.fid_score import calculate_frechet_distance
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 os.environ.setdefault('KMP_DUPLICATE_LIB_OK', 'TRUE')
@@ -86,40 +87,13 @@ def load_stats(path: Path) -> Tuple[np.ndarray, np.ndarray, int]:
     return data['mu'], data['sigma'], int(data['count'])
 
 
-def _symmetrize(matrix: np.ndarray) -> np.ndarray:
-    return (matrix + matrix.T) * 0.5
-
-
-def _sqrt_and_inv_sqrt(matrix: np.ndarray, eps: float = 1e-10) -> Tuple[np.ndarray, np.ndarray]:
-    matrix = _symmetrize(matrix)
-    eigvals, eigvecs = np.linalg.eigh(matrix)
-    eigvals = np.clip(eigvals, eps, None)
-    sqrt_vals = np.sqrt(eigvals)
-    inv_sqrt_vals = np.divide(1.0, sqrt_vals, out = np.zeros_like(sqrt_vals), where = sqrt_vals > eps)
-    sqrt_mat = (eigvecs * sqrt_vals) @ eigvecs.T
-    inv_sqrt_mat = (eigvecs * inv_sqrt_vals) @ eigvecs.T
-    return sqrt_mat, inv_sqrt_mat
-
-
-def _sqrtm_product(sigma1: np.ndarray, sigma2: np.ndarray) -> np.ndarray:
-    sqrt_sigma1, inv_sqrt_sigma1 = _sqrt_and_inv_sqrt(sigma1)
-    middle = inv_sqrt_sigma1 @ sigma2 @ inv_sqrt_sigma1
-    middle = _symmetrize(middle)
-    sqrt_middle, _ = _sqrt_and_inv_sqrt(middle)
-    return sqrt_sigma1 @ sqrt_middle @ sqrt_sigma1
-
-
 def calculate_fid(
     mu1: np.ndarray,
     sigma1: np.ndarray,
     mu2: np.ndarray,
     sigma2: np.ndarray,
 ) -> float:
-    diff = mu1 - mu2
-    covmean = _sqrtm_product(sigma1, sigma2)
-    trace_term = np.trace(sigma1 + sigma2 - 2.0 * covmean)
-    fid = diff.dot(diff) + trace_term
-    return float(np.real(fid))
+    return float(calculate_frechet_distance(mu1, sigma1, mu2, sigma2))
 
 
 def build_inception_model() -> torch.nn.Module:
@@ -137,8 +111,8 @@ if __name__ == '__main__':
     # ------------------------------------------------------------------ #
     DATASET_DIR = r'D:\datasets\CelebAMask-HQ\CelebAMask-HQ\256'
     GENERATED_DIR = r'FID_Images/DiT_9L'
-    # GENERATED_DIR = r'FID_Images/DiT_12L'
-    # GENERATED_DIR = r'FID_Images/Unet'
+    GENERATED_DIR = r'FID_Images/DiT_12L'
+    GENERATED_DIR = r'FID_Images/Unet'
     BATCH_SIZE = 64
     MAX_DATASET = None      # e.g. 500 for a quick sanity check
     MAX_GENERATED = None
