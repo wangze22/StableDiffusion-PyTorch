@@ -57,14 +57,15 @@ def _latent_size(cfg) -> int:
 
 def load_text_components(cfg):
     if 'text' not in cfg.ldm_condition_types:
-        return None, None, None
+        return None, None, None, None
+    text_device = torch.device('cpu')
     with torch.no_grad():
         tokenizer, model = get_tokenizer_and_model(
             cfg.ldm_text_condition_text_embed_model,
-            device = device,
+            device = text_device,
         )
-        empty_embed = get_text_representation([''], tokenizer, model, device)
-    return tokenizer, model, empty_embed
+        empty_embed = get_text_representation([''], tokenizer, model, text_device).cpu()
+    return tokenizer, model, empty_embed, text_device
 
 
 def build_dit_model(cfg, ldm_ckpt_path: Path, use_data_parallel: bool) -> torch.nn.Module:
@@ -164,6 +165,7 @@ def gather_condition_payloads(
     cond_types: Iterable[str],
     text_tokenizer,
     text_model,
+    text_device,
     max_items: Optional[int],
 ) -> Iterable[ConditionPayload]:
     text_enabled = 'text' in cond_types
@@ -180,7 +182,8 @@ def gather_condition_payloads(
             caption_path = dataset.texts[idx]
             prompt = read_first_caption(caption_path)
             with torch.no_grad():
-                prompt_embed = get_text_representation([prompt], text_tokenizer, text_model, device)
+                embed_device = text_device if text_device is not None else device
+                prompt_embed = get_text_representation([prompt], text_tokenizer, text_model, embed_device).cpu()
 
         if image_enabled:
             mask_tensor = dataset.get_mask(idx).float()
@@ -312,7 +315,7 @@ def run_generation(
     if not condition_types:
         raise ValueError('At least one condition type must be enabled in the config.')
 
-    text_tokenizer, text_model, empty_text_embed = load_text_components(cfg)
+    text_tokenizer, text_model, empty_text_embed, text_device = load_text_components(cfg)
 
     use_data_parallel = active_gpus > 1
     model = build_dit_model(cfg, ldm_ckpt, use_data_parallel = use_data_parallel)
@@ -381,6 +384,7 @@ def run_generation(
         cond_types = condition_types,
         text_tokenizer = text_tokenizer,
         text_model = text_model,
+        text_device = text_device,
         max_items = limit_num_items,
     )
 
