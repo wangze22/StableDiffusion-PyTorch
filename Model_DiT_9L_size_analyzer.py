@@ -83,7 +83,7 @@ def main():
                 array_device_name='TC05-DiT-9L'
             )
             print('Weight mapping completed successfully.')
-            print('Check the "Array_Mapping_Info_(TC05)" directory for visualization.')
+            print('Check the "Array_Mapping_Info_(TC05-DiT-9L)" directory for visualization.')
         except Exception as e:
             print(f'Error during weight mapping: {e}')
 

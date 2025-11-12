@@ -211,7 +211,7 @@ def map_weight_for_model(model,
                 module.name = name
                 break
     if draw_weight_block:
-        draw_weight_blocks(model, path = f'Array_Mapping_Info_({array_device_name})')
+        draw_weight_blocks_auto_resize(model, path = f'Array_Mapping_Info_({array_device_name})')
     return model_weight_mapping_info
 
 
@@ -383,11 +383,11 @@ def draw_weight_blocks_idx_name(model, path = None):
             plt.plot(
                 [start_col, start_col + col_num, start_col + col_num, start_col, start_col],
                 [start_row, start_row, start_row + row_num, start_row + row_num, start_row],
-                color = random_color, linewidth = 1)
+                color = random_color, linewidth = 3)
 
             # 在区域内部标注层名
             plt.text(start_col + col_num / 2, start_row + row_num / 2, layer_name,
-                     color = random_color, fontsize = 8,
+                     color = random_color, fontsize = 10,
                      horizontalalignment = 'center', verticalalignment = 'center')
 
         # 保存图像为jpg
@@ -395,3 +395,153 @@ def draw_weight_blocks_idx_name(model, path = None):
         plt.savefig(f"{dir}/array_{array_idx}.jpg", format = 'jpg',
                     dpi = 300, bbox_inches = 'tight', pad_inches = 0)
         plt.close()
+
+import os, random, colorsys
+import numpy as np
+import matplotlib.pyplot as plt
+
+def _fit_center_text(ax, center_x, center_y, box_w, box_h, text, color,
+                     target_ratio=0.8, rot=0, font_min=4, font_max=200, tol=0.5):
+    """
+    在给定矩形框内(以数据坐标计)居中放置文本，自动调整字号使其外接框尺寸
+    同时不超过 box_w/box_h 的 target_ratio 比例。
+    返回创建的 Text 对象以及最终字号。
+    """
+    # 二分搜索字号
+    best_artist = None
+    best_size = font_min
+    lo, hi = font_min, font_max
+
+    # 先放一个临时文本以便获取 renderer
+    tmp = ax.text(center_x, center_y, text, color=color, fontsize=font_min,
+                  ha='center', va='center', rotation=rot, clip_on=True)
+    ax.figure.canvas.draw()  # 需要先 draw 才能拿到 renderer
+    renderer = ax.figure.canvas.get_renderer()
+    tmp.remove()
+
+    inv = ax.transData.inverted()
+
+    def fits(fontsize):
+        t = ax.text(center_x, center_y, text, color=color, fontsize=fontsize,
+                    ha='center', va='center', rotation=rot, clip_on=True)
+        # 触发一次布局，拿 bbox
+        ax.figure.canvas.draw()
+        bbox_disp = t.get_window_extent(renderer=renderer).expanded(1.0, 1.0)
+        # 将像素坐标转为数据坐标测量宽高
+        (x0, y0) = inv.transform((bbox_disp.x0, bbox_disp.y0))
+        (x1, y1) = inv.transform((bbox_disp.x1, bbox_disp.y1))
+        w_data = abs(x1 - x0)
+        h_data = abs(y1 - y0)
+        ok = (w_data <= target_ratio * box_w) and (h_data <= target_ratio * box_h)
+        return ok, t, w_data, h_data
+
+    while hi - lo > tol:
+        mid = (lo + hi) / 2.0
+        ok, t_mid, _, _ = fits(mid)
+        if ok:
+            # 暂存当前可行解
+            if best_artist:
+                best_artist.remove()
+            best_artist = t_mid
+            best_size = mid
+            lo = mid  # 可以更大
+        else:
+            t_mid.remove()
+            hi = mid  # 需要更小
+
+    # 如果最后没有可行 artist（极小框），放最小字号
+    if best_artist is None:
+        ok, t_min, _, _ = fits(font_min)
+        if ok:
+            best_artist = t_min
+            best_size = font_min
+        else:
+            # 实在放不下时，缩到最小并仍然放置（可能会超界，但尽量可见）
+            t_min.set_fontsize(font_min)
+            best_artist = t_min
+            best_size = font_min
+
+    return best_artist, best_size
+
+def draw_weight_blocks_auto_resize(model, path=None):
+    if path is None:
+        cur_dir = os.getcwd()
+        dir = f'{cur_dir}/Arrays_Draw'
+    else:
+        dir = path
+
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    else:
+        clear_directory(dir)  # 清空文件夹
+
+    device_arrays = []
+    name_idx = 0
+
+    # 聚合每个 array 的层与颜色
+    for name, module in model.named_modules():
+        if hasattr(module, 'weight_mapping_info'):
+            h = random.random()
+            r, g, b = colorsys.hsv_to_rgb(h, s=0.8, v=1)
+            random_color = (r, g, b)
+
+            for split_key, split_info in module.weight_mapping_info.items():
+                if split_info.get('array_idx', None) is not None:
+                    array_idx = split_info['array_idx']
+                    array_size = split_info['array_size']
+                    while len(device_arrays) <= array_idx:
+                        device_arrays.append(None)
+                    if device_arrays[array_idx] is None:
+                        device_arrays[array_idx] = {'size': array_size, 'layers': []}
+                    device_arrays[array_idx]['layers'].append(
+                        (f'Conv_{name_idx}', split_info, random_color))
+        name_idx += 1
+
+    # 逐个 array 绘制
+    for array_idx, array_info in enumerate(device_arrays):
+        if array_info is None:
+            continue
+
+        H, W = array_info['size']  # size: (rows, cols)
+        fig, ax = plt.subplots(figsize=(W/50, H/50), dpi=300)  # 粗略按像素感比例定画布
+        # 灰底
+        ax.imshow(np.ones((H, W)) * 127, cmap='gray', extent=(0, W, H, 0))
+        ax.set_axis_off()
+
+        for layer_name, split_info, random_color in array_info['layers']:
+            start_row, start_col, _, _ = split_info['weight_addr']
+            row_num, col_num = split_info['row_num'], split_info['col_num']
+
+            # 外框
+            ax.plot(
+                [start_col, start_col + col_num, start_col + col_num, start_col, start_col],
+                [start_row, start_row, start_row + row_num, start_row + row_num, start_row],
+                color=random_color, linewidth=3)
+
+            # 决定文字方向：看框的“可用空间”谁更大（横向还是纵向）
+            rotation = 0 if col_num >= row_num else 90
+
+            # 居中坐标与尺寸（数据坐标）
+            cx = start_col + col_num / 2.0
+            cy = start_row + row_num / 2.0
+
+            # 自动调节字号以占据 80% 的宽高
+            _fit_center_text(
+                ax=ax,
+                center_x=cx,
+                center_y=cy,
+                box_w=col_num,
+                box_h=row_num,
+                text=layer_name,
+                color=random_color,
+                target_ratio=0.8,
+                rot=rotation,
+                font_min=4,
+                font_max=300,
+                tol=0.5
+            )
+
+        fig.tight_layout(h_pad=0, w_pad=0)
+        fig.savefig(f"{dir}/array_{array_idx}.jpg", format='jpg', dpi=300,
+                    bbox_inches='tight', pad_inches=0)
+        plt.close(fig)
