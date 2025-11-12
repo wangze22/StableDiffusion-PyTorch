@@ -401,67 +401,69 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def _fit_center_text(ax, center_x, center_y, box_w, box_h, text, color,
-                     target_ratio=0.8, rot=0, font_min=4, font_max=200, tol=0.5):
+                     renderer, target_ratio=0.8, rot=0,
+                     font_min=4, font_max=200):
     """
     在给定矩形框内(以数据坐标计)居中放置文本，自动调整字号使其外接框尺寸
     同时不超过 box_w/box_h 的 target_ratio 比例。
     返回创建的 Text 对象以及最终字号。
     """
-    # 二分搜索字号
-    best_artist = None
-    best_size = font_min
-    lo, hi = font_min, font_max
-
-    # 先放一个临时文本以便获取 renderer
-    tmp = ax.text(center_x, center_y, text, color=color, fontsize=font_min,
-                  ha='center', va='center', rotation=rot, clip_on=True)
-    ax.figure.canvas.draw()  # 需要先 draw 才能拿到 renderer
-    renderer = ax.figure.canvas.get_renderer()
-    tmp.remove()
-
     inv = ax.transData.inverted()
 
-    def fits(fontsize):
-        t = ax.text(center_x, center_y, text, color=color, fontsize=fontsize,
-                    ha='center', va='center', rotation=rot, clip_on=True)
-        # 触发一次布局，拿 bbox
-        ax.figure.canvas.draw()
-        bbox_disp = t.get_window_extent(renderer=renderer).expanded(1.0, 1.0)
-        # 将像素坐标转为数据坐标测量宽高
-        (x0, y0) = inv.transform((bbox_disp.x0, bbox_disp.y0))
-        (x1, y1) = inv.transform((bbox_disp.x1, bbox_disp.y1))
-        w_data = abs(x1 - x0)
-        h_data = abs(y1 - y0)
-        ok = (w_data <= target_ratio * box_w) and (h_data <= target_ratio * box_h)
-        return ok, t, w_data, h_data
+    def data_size(artist):
+        bbox = artist.get_window_extent(renderer=renderer)
+        (x0, y0) = inv.transform((bbox.x0, bbox.y0))
+        (x1, y1) = inv.transform((bbox.x1, bbox.y1))
+        return abs(x1 - x0), abs(y1 - y0)
 
-    while hi - lo > tol:
-        mid = (lo + hi) / 2.0
-        ok, t_mid, _, _ = fits(mid)
-        if ok:
-            # 暂存当前可行解
-            if best_artist:
-                best_artist.remove()
-            best_artist = t_mid
-            best_size = mid
-            lo = mid  # 可以更大
-        else:
-            t_mid.remove()
-            hi = mid  # 需要更小
+    allowed_w = target_ratio * box_w
+    allowed_h = target_ratio * box_h
 
-    # 如果最后没有可行 artist（极小框），放最小字号
-    if best_artist is None:
-        ok, t_min, _, _ = fits(font_min)
-        if ok:
-            best_artist = t_min
-            best_size = font_min
-        else:
-            # 实在放不下时，缩到最小并仍然放置（可能会超界，但尽量可见）
-            t_min.set_fontsize(font_min)
-            best_artist = t_min
-            best_size = font_min
+    text_artist = ax.text(
+        center_x,
+        center_y,
+        text,
+        color=color,
+        fontsize=font_min,
+        ha='center',
+        va='center',
+        rotation=rot,
+        clip_on=True
+    )
 
-    return best_artist, best_size
+    w_data, h_data = data_size(text_artist)
+    if w_data == 0 or h_data == 0:
+        return text_artist, font_min
+
+    scale_w = allowed_w / w_data if w_data > 0 else 1.0
+    scale_h = allowed_h / h_data if h_data > 0 else 1.0
+    scale = max(1e-3, min(scale_w, scale_h))
+    target_font = np.clip(font_min * scale, font_min, font_max)
+    text_artist.set_fontsize(target_font)
+
+    # 微调两次，保证不会超过盒子
+    for _ in range(2):
+        w_data, h_data = data_size(text_artist)
+        if w_data <= allowed_w and h_data <= allowed_h:
+            break
+        shrink_w = allowed_w / w_data if w_data > 0 else 1.0
+        shrink_h = allowed_h / h_data if h_data > 0 else 1.0
+        shrink = 0.95 * min(shrink_w, shrink_h)
+        new_font = max(font_min, text_artist.get_fontsize() * shrink)
+        if abs(new_font - text_artist.get_fontsize()) < 0.1:
+            break
+        text_artist.set_fontsize(new_font)
+
+    return text_artist, text_artist.get_fontsize()
+
+def _resolve_linewidth(row_num, col_num, array_shape, min_width=0.8, max_width=6.0):
+    max_dim = max(array_shape[0], array_shape[1])
+    if max_dim == 0:
+        return min_width
+    rel = max(row_num, col_num) / max_dim
+    # 适当放大不同尺寸之间的差异
+    linewidth = min_width + rel * (max_width - min_width)
+    return float(np.clip(linewidth, min_width, max_width))
 
 def draw_weight_blocks_auto_resize(model, path=None):
     if path is None:
@@ -507,16 +509,19 @@ def draw_weight_blocks_auto_resize(model, path=None):
         # 灰底
         ax.imshow(np.ones((H, W)) * 127, cmap='gray', extent=(0, W, H, 0))
         ax.set_axis_off()
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
 
         for layer_name, split_info, random_color in array_info['layers']:
             start_row, start_col, _, _ = split_info['weight_addr']
             row_num, col_num = split_info['row_num'], split_info['col_num']
+            linewidth = _resolve_linewidth(row_num, col_num, array_info['size'])
 
             # 外框
             ax.plot(
                 [start_col, start_col + col_num, start_col + col_num, start_col, start_col],
                 [start_row, start_row, start_row + row_num, start_row + row_num, start_row],
-                color=random_color, linewidth=3)
+                color=random_color, linewidth=linewidth)
 
             # 决定文字方向：看框的“可用空间”谁更大（横向还是纵向）
             rotation = 0 if col_num >= row_num else 90
@@ -534,11 +539,11 @@ def draw_weight_blocks_auto_resize(model, path=None):
                 box_h=row_num,
                 text=layer_name,
                 color=random_color,
+                renderer=renderer,
                 target_ratio=0.8,
                 rot=rotation,
                 font_min=4,
-                font_max=300,
-                tol=0.5
+                font_max=300
             )
 
         fig.tight_layout(h_pad=0, w_pad=0)
