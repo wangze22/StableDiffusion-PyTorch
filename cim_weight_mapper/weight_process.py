@@ -211,7 +211,7 @@ def map_weight_for_model(model,
                 module.name = name
                 break
     if draw_weight_block:
-        draw_weight_blocks(model, path = f'Array_Mapping_Info_({array_device_name})')
+        draw_weight_blocks_auto_resize(model, path = f'Array_Mapping_Info_({array_device_name})')
     return model_weight_mapping_info
 
 
@@ -383,11 +383,11 @@ def draw_weight_blocks_idx_name(model, path = None):
             plt.plot(
                 [start_col, start_col + col_num, start_col + col_num, start_col, start_col],
                 [start_row, start_row, start_row + row_num, start_row + row_num, start_row],
-                color = random_color, linewidth = 1)
+                color = random_color, linewidth = 3)
 
             # 在区域内部标注层名
             plt.text(start_col + col_num / 2, start_row + row_num / 2, layer_name,
-                     color = random_color, fontsize = 8,
+                     color = random_color, fontsize = 10,
                      horizontalalignment = 'center', verticalalignment = 'center')
 
         # 保存图像为jpg
@@ -395,3 +395,158 @@ def draw_weight_blocks_idx_name(model, path = None):
         plt.savefig(f"{dir}/array_{array_idx}.jpg", format = 'jpg',
                     dpi = 300, bbox_inches = 'tight', pad_inches = 0)
         plt.close()
+
+import os, random, colorsys
+import numpy as np
+import matplotlib.pyplot as plt
+
+def _fit_center_text(ax, center_x, center_y, box_w, box_h, text, color,
+                     renderer, target_ratio=0.8, rot=0,
+                     font_min=4, font_max=200):
+    """
+    在给定矩形框内(以数据坐标计)居中放置文本，自动调整字号使其外接框尺寸
+    同时不超过 box_w/box_h 的 target_ratio 比例。
+    返回创建的 Text 对象以及最终字号。
+    """
+    inv = ax.transData.inverted()
+
+    def data_size(artist):
+        bbox = artist.get_window_extent(renderer=renderer)
+        (x0, y0) = inv.transform((bbox.x0, bbox.y0))
+        (x1, y1) = inv.transform((bbox.x1, bbox.y1))
+        return abs(x1 - x0), abs(y1 - y0)
+
+    allowed_w = target_ratio * box_w
+    allowed_h = target_ratio * box_h
+
+    text_artist = ax.text(
+        center_x,
+        center_y,
+        text,
+        color=color,
+        fontsize=font_min,
+        ha='center',
+        va='center',
+        rotation=rot,
+        clip_on=True
+    )
+
+    w_data, h_data = data_size(text_artist)
+    if w_data == 0 or h_data == 0:
+        return text_artist, font_min
+
+    scale_w = allowed_w / w_data if w_data > 0 else 1.0
+    scale_h = allowed_h / h_data if h_data > 0 else 1.0
+    scale = max(1e-3, min(scale_w, scale_h))
+    target_font = np.clip(font_min * scale, font_min, font_max)
+    text_artist.set_fontsize(target_font)
+
+    # 微调两次，保证不会超过盒子
+    for _ in range(2):
+        w_data, h_data = data_size(text_artist)
+        if w_data <= allowed_w and h_data <= allowed_h:
+            break
+        shrink_w = allowed_w / w_data if w_data > 0 else 1.0
+        shrink_h = allowed_h / h_data if h_data > 0 else 1.0
+        shrink = 0.95 * min(shrink_w, shrink_h)
+        new_font = max(font_min, text_artist.get_fontsize() * shrink)
+        if abs(new_font - text_artist.get_fontsize()) < 0.1:
+            break
+        text_artist.set_fontsize(new_font)
+
+    return text_artist, text_artist.get_fontsize()
+
+def _resolve_linewidth(row_num, col_num, array_shape, min_width=0.8, max_width=6.0):
+    max_dim = max(array_shape[0], array_shape[1])
+    if max_dim == 0:
+        return min_width
+    rel = max(row_num, col_num) / max_dim
+    # 适当放大不同尺寸之间的差异
+    linewidth = min_width + rel * (max_width - min_width)
+    return float(np.clip(linewidth, min_width, max_width))
+
+def draw_weight_blocks_auto_resize(model, path=None):
+    if path is None:
+        cur_dir = os.getcwd()
+        dir = f'{cur_dir}/Arrays_Draw'
+    else:
+        dir = path
+
+    if not os.path.exists(dir):
+        os.makedirs(dir)
+    else:
+        clear_directory(dir)  # 清空文件夹
+
+    device_arrays = []
+    name_idx = 0
+
+    # 聚合每个 array 的层与颜色
+    for name, module in model.named_modules():
+        if hasattr(module, 'weight_mapping_info'):
+            h = random.random()
+            r, g, b = colorsys.hsv_to_rgb(h, s=0.8, v=1)
+            random_color = (r, g, b)
+
+            for split_key, split_info in module.weight_mapping_info.items():
+                if split_info.get('array_idx', None) is not None:
+                    array_idx = split_info['array_idx']
+                    array_size = split_info['array_size']
+                    while len(device_arrays) <= array_idx:
+                        device_arrays.append(None)
+                    if device_arrays[array_idx] is None:
+                        device_arrays[array_idx] = {'size': array_size, 'layers': []}
+                    device_arrays[array_idx]['layers'].append(
+                        (f'Conv_{name_idx}', split_info, random_color))
+        name_idx += 1
+
+    # 逐个 array 绘制
+    for array_idx, array_info in enumerate(device_arrays):
+        if array_info is None:
+            continue
+
+        H, W = array_info['size']  # size: (rows, cols)
+        fig, ax = plt.subplots(figsize=(W/50, H/50), dpi=300)  # 粗略按像素感比例定画布
+        # 灰底
+        ax.imshow(np.ones((H, W)) * 127, cmap='gray', extent=(0, W, H, 0))
+        ax.set_axis_off()
+        fig.canvas.draw()
+        renderer = fig.canvas.get_renderer()
+
+        for layer_name, split_info, random_color in array_info['layers']:
+            start_row, start_col, _, _ = split_info['weight_addr']
+            row_num, col_num = split_info['row_num'], split_info['col_num']
+            linewidth = _resolve_linewidth(row_num, col_num, array_info['size'])
+
+            # 外框
+            ax.plot(
+                [start_col, start_col + col_num, start_col + col_num, start_col, start_col],
+                [start_row, start_row, start_row + row_num, start_row + row_num, start_row],
+                color=random_color, linewidth=linewidth)
+
+            # 决定文字方向：看框的“可用空间”谁更大（横向还是纵向）
+            rotation = 0 if col_num >= row_num else 90
+
+            # 居中坐标与尺寸（数据坐标）
+            cx = start_col + col_num / 2.0
+            cy = start_row + row_num / 2.0
+
+            # 自动调节字号以占据 80% 的宽高
+            _fit_center_text(
+                ax=ax,
+                center_x=cx,
+                center_y=cy,
+                box_w=col_num,
+                box_h=row_num,
+                text=layer_name,
+                color=random_color,
+                renderer=renderer,
+                target_ratio=0.8,
+                rot=rotation,
+                font_min=4,
+                font_max=300
+            )
+
+        fig.tight_layout(h_pad=0, w_pad=0)
+        fig.savefig(f"{dir}/array_{array_idx}.jpg", format='jpg', dpi=300,
+                    bbox_inches='tight', pad_inches=0)
+        plt.close(fig)

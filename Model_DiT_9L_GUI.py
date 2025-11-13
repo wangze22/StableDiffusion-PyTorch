@@ -1005,32 +1005,32 @@ if __name__ == '__main__':
     # ======================================================================= #
     # ADDA 模型
     # ======================================================================= #
-    trainer.convert_to_layers(
-        convert_layer_type_list = reg_dict.custom_layers,
-        tar_layer_type = 'layers_qn_lsq_adda_cim',
-        noise_scale = andi_cfg.adda_noise_range[0],
-        input_bit = andi_cfg.adda_input_bit_range[0],
-        output_bit = andi_cfg.adda_output_bit_range[0],
-        weight_bit = andi_cfg.adda_weight_bit_range[0],
-        dac_bit = 5,
-        adc_bit = 8,
-        adc_gain_1_scale = 9.071428571,
-        adc_gain_range = [1 / 64, 1 / 64],  # 8-bit ADC 情况下，增益不可调
-        adc_adjust_mode = 'current',
-        )
-    ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
-    # ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/checkpoints/epoch_030_ddpm_ckpt_text_image_cond_clip.pth'
-    model.load_state_dict(torch.load(ldm_ckpt))
-    trainer.update_layer_parameter(
-        update_layer_type_list = ['layers_qn_lsq_adda_cim'],
-        input_bit = 8,
-        )
-    map_weight_for_model(
-        trainer.model,
-        array_device_name = 'TC05_GUI',
-        array_size = [576, 2048],
-        weight_block_size = [576, 2048],
-        draw_weight_block = False,
-        )
+    # trainer.convert_to_layers(
+    #     convert_layer_type_list = reg_dict.custom_layers,
+    #     tar_layer_type = 'layers_qn_lsq_adda_cim',
+    #     noise_scale = andi_cfg.adda_noise_range[0],
+    #     input_bit = andi_cfg.adda_input_bit_range[0],
+    #     output_bit = andi_cfg.adda_output_bit_range[0],
+    #     weight_bit = andi_cfg.adda_weight_bit_range[0],
+    #     dac_bit = 5,
+    #     adc_bit = 8,
+    #     adc_gain_1_scale = 9.071428571,
+    #     adc_gain_range = [1 / 64, 1 / 64],  # 8-bit ADC 情况下，增益不可调
+    #     adc_adjust_mode = 'current',
+    #     )
+    # ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/ddpm_ckpt_text_image_cond_clip.pth'
+    # # ldm_ckpt = 'runs_DiT_9L_server/ddpm_20251109-201950/LSQ_ADDA/cyc_0_w4b_0.08/checkpoints/epoch_030_ddpm_ckpt_text_image_cond_clip.pth'
+    # model.load_state_dict(torch.load(ldm_ckpt))
+    # trainer.update_layer_parameter(
+    #     update_layer_type_list = ['layers_qn_lsq_adda_cim'],
+    #     input_bit = 8,
+    #     )
+    # map_weight_for_model(
+    #     trainer.model,
+    #     array_device_name = 'TC05_GUI',
+    #     array_size = [576, 2048],
+    #     weight_block_size = [576, 2048],
+    #     draw_weight_block = False,
+    #     )
 
     main(model, vqvae_ckpt)

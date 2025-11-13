@@ -135,7 +135,7 @@ def build_dit_model(cfg, ldm_ckpt_path: Path, use_data_parallel: bool) -> torch.
     trainer.convert_to_layers(
         convert_layer_type_list = reg_dict.nn_layers,
         tar_layer_type = 'layers_qn_lsq',
-        noise_scale = 0.05,
+        noise_scale = 0.0,
         input_bit = 8,
         output_bit = 8,
         weight_bit = 4,
@@ -616,17 +616,17 @@ if __name__ == '__main__':
         {
             'config_module': 'Model_DiT_9L_config',
             'ldm_ckpt': 'runs_DiT_9L_server/ddpm_20251105-231756_save/LSQ_AnDi/w4b_0.098776/ddpm_ckpt_text_image_cond_clip.pth',
-            'output_dir': 'FID_Images/DiT_9L',
+            'output_dir': 'FID_Images/DiT_9L_ideal',
         },
         {
             'config_module': 'Model_DiT_12L_config',
             'ldm_ckpt': 'runs_DiT_12L_server/ddpm_20251103-232943_save/LSQ_AnDi/w4b_0.097959/ddpm_ckpt_text_image_cond_clip.pth',
-            'output_dir': 'FID_Images/DiT_12L',
+            'output_dir': 'FID_Images/DiT_12L_ideal',
         },
         {
             'config_module': 'Model_Unet_config',
             'ldm_ckpt': 'runs_Unet_server/ddpm_20251104-133643/LSQ_AnDi/w4b_0.087755/ddpm_ckpt_text_image_cond_clip.pth',
-            'output_dir': 'FID_Images/Unet',
+            'output_dir': 'FID_Images/Unet_ideal',
         },
     ]
 
