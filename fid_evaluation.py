@@ -109,9 +109,9 @@ def build_inception_model() -> torch.nn.Module:
 
 if __name__ == '__main__':
     # ------------------------------------------------------------------ #
-    DATASET_DIR = r'D:\datasets\CelebAMask-HQ\CelebAMask-HQ\256'
-    GENERATED_DIR = r'FID_Images/DiT_9L'
-    GENERATED_DIR = r'FID_Images/DiT_12L'
+    DATASET_DIR = r'D:\datasets\CelebAMask-HQ\256'
+    # GENERATED_DIR = r'FID_Images/DiT_9L_ideal'
+    # GENERATED_DIR = r'FID_Images/DiT_12L_ideal'
     GENERATED_DIR = r'FID_Images/Unet'
     BATCH_SIZE = 64
     MAX_DATASET = None      # e.g. 500 for a quick sanity check
@@ -149,5 +149,6 @@ if __name__ == '__main__':
     print('--------------------------------------------------')
     print(f'Dataset images : {dataset_count}')
     print(f'Generated imgs : {len(generated_paths)}')
+    print(f'Dir = {GENERATED_DIR}')
     print(f'FID            : {fid_value:.4f}')
     print('--------------------------------------------------')
