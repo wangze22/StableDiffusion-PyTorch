@@ -265,6 +265,7 @@ def draw_weight_blocks(model, path = None):
 
             # 获取权重分割信息
             device_arrays = array_devices[module.array_device]
+
             for split_key, split_info in module.weight_mapping_info.items():
                 if split_info.get('array_idx', None) != None:
                     array_idx = split_info['array_idx']
@@ -361,7 +362,7 @@ def draw_weight_blocks_idx_name(model, path = None):
                                                     'layers': []}
                     # 添加层和颜色信息
                     device_arrays[array_idx]['layers'].append(
-                        (f'Conv_{name_idx}', split_info, random_color))
+                        (_layer_label_from_module(module, name_idx), split_info, random_color))
             name_idx += 1
     # 遍历每个设备数组
     for array_idx, array_info in enumerate(device_arrays):
@@ -399,6 +400,16 @@ def draw_weight_blocks_idx_name(model, path = None):
 import os, random, colorsys
 import numpy as np
 import matplotlib.pyplot as plt
+
+def _layer_label_from_module(module, idx):
+    module_name = module.__class__.__name__.lower()
+    if 'conv' in module_name:
+        prefix = 'conv'
+    elif 'linear' in module_name or 'fc' in module_name:
+        prefix = 'fc'
+    else:
+        prefix = module_name
+    return f'{prefix}_{idx}'
 
 def _fit_center_text(ax, center_x, center_y, box_w, box_h, text, color,
                      renderer, target_ratio=0.8, rot=0,
@@ -483,6 +494,7 @@ def draw_weight_blocks_auto_resize(model, path=None):
     # 聚合每个 array 的层与颜色
     for name, module in model.named_modules():
         if hasattr(module, 'weight_mapping_info'):
+            layer_label = _layer_label_from_module(module, name_idx)
             h = random.random()
             r, g, b = colorsys.hsv_to_rgb(h, s=0.8, v=1)
             random_color = (r, g, b)
@@ -496,8 +508,8 @@ def draw_weight_blocks_auto_resize(model, path=None):
                     if device_arrays[array_idx] is None:
                         device_arrays[array_idx] = {'size': array_size, 'layers': []}
                     device_arrays[array_idx]['layers'].append(
-                        (f'Conv_{name_idx}', split_info, random_color))
-        name_idx += 1
+                        (layer_label, split_info, random_color))
+            name_idx += 1
 
     # 逐个 array 绘制
     for array_idx, array_info in enumerate(device_arrays):
